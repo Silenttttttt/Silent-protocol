@@ -2,7 +2,7 @@ import socket
 import os
 import sys
 import json
-from protocol import SilentProtocol, binary_string_to_bytes, bytes_to_binary_string
+from protocol import SilentProtocol, binary_string_to_bytes
 
 SOCKET_PATH = "/tmp/protocol_socket"
 
@@ -51,7 +51,7 @@ def run_protocol(role):
                     break
 
                 # Decrypt and process the received message
-                decrypted_message, header, message_type = protocol.decrypt_data(bytes_to_binary_string(data))
+                decrypted_message, header, message_type = protocol.decrypt_data(data)
                 if decrypted_message is None:
                     print("Failed to decrypt message.")
                     continue
@@ -59,8 +59,8 @@ def run_protocol(role):
 
                 # Send a response back to Protocol B
                 response_data = json.dumps({"response": "Message received"}).encode('utf-8')
-                encrypted_response = protocol.create_response(session_id, response_data)
-                connection.sendall(binary_string_to_bytes(encrypted_response))
+                encrypted_response = binary_string_to_bytes(protocol.create_response(session_id, response_data))
+                connection.sendall(encrypted_response)
 
         finally:
             connection.close()
@@ -94,8 +94,8 @@ def run_protocol(role):
                 # Send a message to Protocol A
                 message = input("Enter message to send: ")
                 request_data = json.dumps({"message": message}).encode('utf-8')
-                encrypted_request = protocol.create_request(session_id, request_data)
-                client_socket.sendall(binary_string_to_bytes(encrypted_request))
+                encrypted_request = binary_string_to_bytes(protocol.create_request(session_id, request_data))
+                client_socket.sendall(encrypted_request)
 
                 # Receive a response from Protocol A
                 data = client_socket.recv(4096)
@@ -103,7 +103,7 @@ def run_protocol(role):
                     break
 
                 # Decrypt and process the received response
-                decrypted_response, header, message_type = protocol.decrypt_data(bytes_to_binary_string(data))
+                decrypted_response, header, message_type = protocol.decrypt_data(data)
                 if decrypted_response is None:
                     print("Failed to decrypt response.")
                     continue
