@@ -82,17 +82,33 @@ class SilentProtocol:
             print("Failed to generate key pair for handshake.")
             return None, None
 
-        # Send public key with handshake flag in DER format
-        return public_key.public_bytes(
+        # Prepare the handshake request
+        handshake_request = public_key.public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
-        ) + HANDSHAKE_FLAG, private_key
+        ) + HANDSHAKE_FLAG
 
+
+        handshake_request_binary = bytes_to_binary_string(handshake_request)
+        encoded_request_binary = encode_binary_string(handshake_request_binary)
+        encoded_request = binary_string_to_bytes(encoded_request_binary)
+
+
+        return encoded_request, private_key
 
     def perform_handshake_response(self, handshake_request):
-        # Convert binary string to bytes if necessary
-        if isinstance(handshake_request, str):
-            handshake_request = binary_string_to_bytes(handshake_request)
+        # Decode using Hamming
+        if isinstance(handshake_request, bytes):
+            handshake_request_binary = bytes_to_binary_string(handshake_request)
+        elif isinstance(handshake_request, str):
+            handshake_request_binary = handshake_request
+        else:
+            print("Handshake request must be bytes or a binary string.")
+            return None, None, None
+
+        # Decode the binary string using Hamming
+        decoded_request_binary = decode_binary_string(handshake_request_binary)
+        handshake_request = binary_string_to_bytes(decoded_request_binary)
 
         if not handshake_request.endswith(HANDSHAKE_FLAG):
             print("Invalid handshake request.")
@@ -123,7 +139,7 @@ class SilentProtocol:
         }).encode('utf-8')
         encrypted_handshake_data = aesgcm.encrypt(nonce, handshake_data, None)
 
-        # Send back public key, HSK flag, and encrypted handshake data
+      # Prepare the response
         response = (
             public_key.public_bytes(
                 encoding=serialization.Encoding.DER,
@@ -133,12 +149,23 @@ class SilentProtocol:
             nonce +
             encrypted_handshake_data
         )
-        return response, private_key, session_id
+
+        # Convert to binary string and encode using Hamming
+        response_binary = bytes_to_binary_string(response)
+        encoded_response_binary = encode_binary_string(response_binary)
+        encoded_response = binary_string_to_bytes(encoded_response_binary)
+
+        return encoded_response, private_key, session_id
 
     def complete_handshake(self, response, private_key):
-        # Convert binary string to bytes if necessary
-        if isinstance(response, str):
-            response = binary_string_to_bytes(response)
+        # Decode using Hamming
+        if isinstance(response, bytes):
+            response_binary = bytes_to_binary_string(response)
+            decoded_response_binary = decode_binary_string(response_binary)
+            response = binary_string_to_bytes(decoded_response_binary)
+        else:
+            print("Response must be bytes.")
+            return None
 
         # Find the position of the HSK flag to separate the public key and the encrypted data
         hsk_index = response.find(HANDSHAKE_FLAG)
