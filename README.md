@@ -33,4 +33,42 @@ SilentProtocol is a TCP-based, bidirectional communication protocol designed to 
    ```bash
    pip install cryptography
    ```
+## Usage
+
+To run the example usage of SilentProtocol, execute the following command:
+
+```bash
+python silent_protocol/protocol.py
+```
+
+This will demonstrate the handshake and message exchange process between two nodes using the SilentProtocol.
+
+## How It Works
+
+1. **Handshake Process**:
+   - A node initiates a handshake by sending its public key.
+   - The receiving node responds with its public key and an encrypted session ID.
+   - The initiating node completes the handshake by deriving a shared session key.
+
+2. **Message Exchange**:
+   - The initiating node encrypts a request using the session key and sends it.
+   - The receiving node decrypts the request, processes it, and sends an encrypted response.
+   - The initiating node decrypts the response to retrieve the message.
+
+## Project Structure
+
+- `protocol.py`: Contains the implementation of the SilentProtocol class and example usage.
+- `hamming.py`: Provides functions for encoding and decoding binary strings using Hamming code.
+
+## Contributing
+
+Contributions are welcome! Feel free to open issues or submit pull requests to improve the project.
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+## Disclaimer
+
+This project is intended for educational purposes only. It is not recommended for use in production environments.
 
