@@ -310,7 +310,7 @@ def main():
         return
 
     # Node B responds to the handshake request
-    response, node_b_private_key = protocol_b.perform_handshake_response(handshake_request)
+    response, node_b_private_key, session_id_b = protocol_b.perform_handshake_response(handshake_request)
 
     if not response:
         print("Failed to perform handshake response.")
@@ -342,7 +342,7 @@ def main():
     print("Request Header:", request_header)
 
     response_data = json.dumps({"data": "Here is your data"}).encode('utf-8')
-    encrypted_response = protocol_b.create_response(session_id, response_data)
+    encrypted_response = protocol_b.create_response(session_id_b, response_data)
     if encrypted_response is None:
         print("Failed to send response.")
         return
