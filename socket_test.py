@@ -2,18 +2,12 @@ import time
 import threading
 import socket
 import os
-from protocol import SilentProtocol
+from protocol import SilentProtocol, binary_string_to_bytes
 import json
 
 SOCKET_PATH = "/tmp/protocol_socket"
 
-def binary_string_to_bytes(binary_str: str) -> bytes:
-    binary_str = binary_str.replace(" ", "")
-    byte_data = int(binary_str, 2)
-    return byte_data.to_bytes((len(binary_str) + 7) // 8, byteorder='big')
 
-def bytes_to_binary_string(byte_data: bytes) -> str:
-    return ''.join(format(byte, '08b') for byte in byte_data)
 
 def server():
     protocol = SilentProtocol()
@@ -49,7 +43,7 @@ def server():
         data = connection.recv(4096)
      #   print(f"Server received data: {data.hex()}")
         if data:
-            decrypted_message, header, message_type = protocol.decrypt_data(bytes_to_binary_string(data))
+            decrypted_message, header, message_type = protocol.decrypt_data(data)
             received_message = decrypted_message.decode(header['encoding'])
             print(f"Received from client: {received_message}")
 
@@ -109,7 +103,7 @@ def client():
         data = client_socket.recv(4096)
     #    print(f"Client received response: {data.hex()}")
         if data:
-            decrypted_response, header, message_type = protocol.decrypt_data(bytes_to_binary_string(data))
+            decrypted_response, header, message_type = protocol.decrypt_data(data)
             received_response = decrypted_response.decode(header['encoding'])
      #       print(f"Received from server: {received_response}")
 
