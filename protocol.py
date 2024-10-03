@@ -13,6 +13,15 @@ HANDSHAKE_FLAG = b'HSK'  # Special flag to indicate a handshake request
 DATA_FLAG = b'DTA'       # Special flag to indicate a data message
 RESPONSE_FLAG = b'RTN'   # Special flag to indicate a response message
 
+def binary_string_to_bytes(binary_str: str) -> bytes:
+    binary_str = binary_str.replace(" ", "")
+    byte_data = int(binary_str, 2)
+    return byte_data.to_bytes((len(binary_str) + 7) // 8, byteorder='big')
+
+def bytes_to_binary_string(byte_data: bytes) -> str:
+    return ''.join(format(byte, '08b') for byte in byte_data)
+
+
 class SilentProtocol:
     DEFAULT_VALIDITY_PERIOD = 3600  # Default validity period of 1 hour
 
@@ -79,7 +88,12 @@ class SilentProtocol:
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         ) + HANDSHAKE_FLAG, private_key
 
+
     def perform_handshake_response(self, handshake_request):
+        # Convert binary string to bytes if necessary
+        if isinstance(handshake_request, str):
+            handshake_request = binary_string_to_bytes(handshake_request)
+
         if not handshake_request.endswith(HANDSHAKE_FLAG):
             print("Invalid handshake request.")
             return None, None, None
@@ -122,6 +136,10 @@ class SilentProtocol:
         return response, private_key, session_id
 
     def complete_handshake(self, response, private_key):
+        # Convert binary string to bytes if necessary
+        if isinstance(response, str):
+            response = binary_string_to_bytes(response)
+
         # Find the position of the HSK flag to separate the public key and the encrypted data
         hsk_index = response.find(HANDSHAKE_FLAG)
         if hsk_index == -1:
@@ -211,8 +229,18 @@ class SilentProtocol:
             print(f"Encryption failed: {e}")
             return None
 
-    def decrypt_data(self, encoded_packet):
+
+    def decrypt_data(self, packet):
         try:
+            # Check if packet is a binary string or bytes and convert accordingly
+            if isinstance(packet, bytes):
+                encoded_packet = bytes_to_binary_string(packet)
+            elif isinstance(packet, str):
+                encoded_packet = packet
+            else:
+                print("Invalid packet type. Must be bytes or binary string.")
+                return None, None, None
+
             # Decode the entire packet using Hamming code
             decoded_packet_binary_str = decode_binary_string(encoded_packet)
 
@@ -266,7 +294,6 @@ class SilentProtocol:
             traceback.print_exc()
             print(f"Decryption failed: {e}")
             return None, None, None
-
 
 # Example usage
 def main():
