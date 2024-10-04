@@ -1,8 +1,8 @@
 def generate_hamming_code(data_bits: str) -> str:
-    # Hamming(8,4) code: 4 data bits, 4 parity bits
+    # Hamming(7,4) code: 4 data bits, 3 parity bits
     data = list(map(int, data_bits))
     m = len(data)
-    r = 4  # For Hamming(8,4), we have 4 parity bits
+    r = 3  # For Hamming(7,4), we have 3 parity bits
 
     hamming_code = [0] * (m + r)
     j = 0
@@ -26,7 +26,7 @@ def generate_hamming_code(data_bits: str) -> str:
 def detect_and_correct_error(hamming_code: str) -> str:
     hamming = list(map(int, hamming_code))
     n = len(hamming)
-    r = 4  # For Hamming(8,4), we have 4 parity bits
+    r = 3  # For Hamming(7,4), we have 3 parity bits
 
     error_pos = 0
     for i in range(r):
@@ -48,40 +48,85 @@ def detect_and_correct_error(hamming_code: str) -> str:
 
     return ''.join(map(str, data_bits))
 
-def encode_binary_string(binary_string: str) -> str:
-    # Calculate padding needed to make the binary string a multiple of 4
-    padding_length = (4 - len(binary_string) % 4) % 4
-    padded_binary_string = binary_string + '0' * padding_length
+def encode_binary_string(data_bits: str) -> str:
+    # Calculate padding needed to make the data a multiple of 4 bits
+    padding_length = (4 - len(data_bits) % 4) % 4
+    padded_data_bits = data_bits + '0' * padding_length
+    print(f"Padded data bits: {padded_data_bits} (Padding length: {padding_length})")
 
-    # Encode the original length of the binary string
-    original_length = len(binary_string)
-    length_bits = f"{original_length:016b}"  # Use 16 bits to store the length
-
-    encoded_parts = [length_bits]
-    for i in range(0, len(padded_binary_string), 4):
-        part = padded_binary_string[i:i+4]
+    encoded_parts = []
+    for i in range(0, len(padded_data_bits), 4):
+        part = padded_data_bits[i:i+4]
         hamming_code = generate_hamming_code(part)
         encoded_parts.append(hamming_code)
-    return ''.join(encoded_parts)
+        print(f"Encoded part: {hamming_code} from data part: {part}")
+
+    # Append the padding length as a 4-bit binary string at the end
+    # The rightmost bit is always 1, the preceding 3 bits represent the padding length
+    padding_info = format(padding_length, '03b') + '1'
+    binary_string = ''.join(encoded_parts) + padding_info
+    print(f"Binary string with padding info: {binary_string} (Padding info: {padding_info})")
+
+    # Calculate additional padding to make the length a multiple of 8
+    total_padding_length = (8 - len(binary_string) % 8) % 8
+    binary_string += '0' * total_padding_length
+    print(f"Final binary string with total padding: {binary_string} (Total padding length: {total_padding_length})")
+
+    return binary_string
 
 def decode_binary_string(encoded_string: str) -> str:
-    # Extract the original length of the binary string
-    length_bits = encoded_string[:16]
-    original_length = int(length_bits, 2)
+    # Find the rightmost '1' to identify the padding info
+    padding_info_index = encoded_string.rfind('1')
+    padding_info = encoded_string[padding_info_index-3:padding_info_index]
+    padding_length = int(padding_info, 2)
+    print(f"Padding info: {padding_info} (Padding length: {padding_length})")
+
+    # Remove the padding info from the encoded string
+    encoded_string = encoded_string[:padding_info_index-3]
+    print(f"Encoded string without padding info: {encoded_string}")
 
     decoded_parts = []
-    for i in range(16, len(encoded_string), 8):
-        hamming_code = encoded_string[i:i+8]
+    for i in range(0, len(encoded_string), 7):
+        hamming_code = encoded_string[i:i+7]
         corrected_code = detect_and_correct_error(hamming_code)
         decoded_parts.append(corrected_code)
+        print(f"Decoded part: {corrected_code} from hamming code: {hamming_code}")
 
     decoded_binary_string = ''.join(decoded_parts)
-    return decoded_binary_string[:original_length]
+    print(f"Decoded binary string before removing padding: {decoded_binary_string}")
+
+    # Remove the padding that was added earlier
+    if padding_length > 0:
+        decoded_binary_string = decoded_binary_string[:-padding_length]
+    print(f"Decoded binary string after removing padding: {decoded_binary_string}")
+
+    return decoded_binary_string
+
+def bytes_to_binary_string(byte_data: bytes) -> str:
+    """
+    Convert each byte to an 8-bit binary string.
+    """
+    binary_string = ''.join(format(byte, '08b') for byte in byte_data)
+    print(f"Converted bytes to binary string: {binary_string}")
+    return binary_string
+
+def binary_string_to_bytes(binary_str: str) -> bytes:
+    """
+    Convert a binary string back to bytes.
+    The binary string length must be a multiple of 8.
+    """
+    if len(binary_str) % 8 != 0:
+        raise ValueError("Binary string length must be a multiple of 8")
+
+    byte_data = bytes(int(binary_str[i:i+8], 2) for i in range(0, len(binary_str), 8))
+    print(f"Converted binary string to bytes: {byte_data}")
+    return byte_data
 
 # Example usage
 if __name__ == "__main__":
     # Convert "Hello world" to a binary string
-    binary_string = ''.join(format(ord(char), '08b') for char in "Hello world!")
+    message = "Hello world!"
+    binary_string = ''.join(format(ord(char), '08b') for char in message)
     print(f'Original binary string: {binary_string}')
 
     # Encode the binary string
@@ -104,3 +149,11 @@ if __name__ == "__main__":
     # Convert the corrected binary string back to text
     decoded_text = ''.join(chr(int(corrected_string[i:i+8], 2)) for i in range(0, len(corrected_string), 8))
     print(f'Decoded text: {decoded_text}')
+    print("Original message: ", message)
+    print("Length of original message: ", len(message))
+    print("Length of decoded message: ", len(decoded_text))
+
+    # Show different chars
+    print("Different chars: ", set(decoded_text) - set(message))
+
+    assert decoded_text == message

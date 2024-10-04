@@ -7,19 +7,12 @@ import os
 import json
 import struct
 import time
-from hamming import encode_binary_string, decode_binary_string
+from hamming import encode_binary_string, decode_binary_string, binary_string_to_bytes, bytes_to_binary_string
 
 HANDSHAKE_FLAG = b'HSK'  # Special flag to indicate a handshake request
 DATA_FLAG = b'DTA'       # Special flag to indicate a data message
 RESPONSE_FLAG = b'RTN'   # Special flag to indicate a response message
 
-def binary_string_to_bytes(binary_str: str) -> bytes:
-    binary_str = binary_str.replace(" ", "")
-    byte_data = int(binary_str, 2)
-    return byte_data.to_bytes((len(binary_str) + 7) // 8, byteorder='big')
-
-def bytes_to_binary_string(byte_data: bytes) -> str:
-    return ''.join(format(byte, '08b') for byte in byte_data)
 
 
 class SilentProtocol:
@@ -81,22 +74,21 @@ class SilentProtocol:
         if not private_key or not public_key:
             print("Failed to generate key pair for handshake.")
             return None, None
-
-        # Prepare the handshake request
-        handshake_request = public_key.public_bytes(
+        public_key_bytes = public_key.public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
-        ) + HANDSHAKE_FLAG
-
-
+        )
+        # Prepare the handshake request
+        handshake_request = public_key_bytes + HANDSHAKE_FLAG
         handshake_request_binary = bytes_to_binary_string(handshake_request)
         encoded_request_binary = encode_binary_string(handshake_request_binary)
-        encoded_request = binary_string_to_bytes(encoded_request_binary)
+    #    encoded_request = binary_string_to_bytes(encoded_request_binary)
 
 
-        return encoded_request, private_key
+        return encoded_request_binary, private_key
 
     def perform_handshake_response(self, handshake_request):
+        print("Handshake request: ", handshake_request)
         # Decode using Hamming
         if isinstance(handshake_request, bytes):
             handshake_request_binary = bytes_to_binary_string(handshake_request)
@@ -105,7 +97,7 @@ class SilentProtocol:
         else:
             print("Handshake request must be bytes or a binary string.")
             return None, None, None
-
+        #print("Handshake request binary: ", handshake_request_binary)
         # Decode the binary string using Hamming
         decoded_request_binary = decode_binary_string(handshake_request_binary)
         handshake_request = binary_string_to_bytes(decoded_request_binary)
@@ -153,18 +145,25 @@ class SilentProtocol:
         # Convert to binary string and encode using Hamming
         response_binary = bytes_to_binary_string(response)
         encoded_response_binary = encode_binary_string(response_binary)
-        encoded_response = binary_string_to_bytes(encoded_response_binary)
+        #encoded_response = binary_string_to_bytes(encoded_response_binary)
 
-        return encoded_response, private_key, session_id
+        return encoded_response_binary, private_key, session_id
 
     def complete_handshake(self, response, private_key):
+        if not response:
+            print("Response is empty.")
+            return None
+
         # Decode using Hamming
         if isinstance(response, bytes):
             response_binary = bytes_to_binary_string(response)
             decoded_response_binary = decode_binary_string(response_binary)
             response = binary_string_to_bytes(decoded_response_binary)
+        elif isinstance(response, str):
+            decoded_response_binary = decode_binary_string(response)
+            response = binary_string_to_bytes(decoded_response_binary)
         else:
-            print("Response must be bytes.")
+            print("Response must be bytes or binary string, got ", type(response))
             return None
 
         # Find the position of the HSK flag to separate the public key and the encrypted data
@@ -336,6 +335,13 @@ def main():
         print("Failed to perform handshake request.")
         return
 
+    # initial_handshake_request = handshake_request
+    
+    # handshake_request = binary_string_to_bytes(handshake_request)
+    # handshake_request = bytes_to_binary_string(handshake_request)
+    # print("Handshake request: ", handshake_request)
+    # assert handshake_request == initial_handshake_request
+
     # Node B responds to the handshake request
     response, node_b_private_key, session_id_b = protocol_b.perform_handshake_response(handshake_request)
 
@@ -351,7 +357,7 @@ def main():
         return
 
     # Node A sends a request to Node B
-    request_data = json.dumps({"action": "get_data"}).encode('utf-8')
+    request_data = json.dumps({"action": "Hello world"}).encode('utf-8')
     encrypted_request = protocol_a.create_request(session_id, request_data)
     if encrypted_request is None:
         print("Failed to send request.")
