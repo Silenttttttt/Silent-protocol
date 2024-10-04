@@ -1,5 +1,6 @@
-from protocol import SilentProtocol, HANDSHAKE_FLAG, DATA_FLAG, RESPONSE_FLAG
+from protocol import SilentProtocol, HANDSHAKE_FLAG, DATA_FLAG, RESPONSE_FLAG, binary_string_to_bytes
 import json
+
 
 class ProtocolWrapper:
     def __init__(self):
@@ -101,17 +102,20 @@ def main():
 
     # Node B decrypts the request and sends a response
     received_request, request_header, message_type = wrapper_b.decrypt_and_receive(encrypted_request)
-    print("Node B received request:", received_request)
+    print("Message Type:", message_type)
     print("Request Header:", request_header)
-
+    print("Node B received request:", received_request)
+    
     response_data = {"data": "Here is your data"}
     encrypted_response = wrapper_b.encrypt_and_send(response_data, RESPONSE_FLAG)
     print(f"Node B sends encrypted response")
 
     # Node A decrypts the response
     received_response, response_header, message_type = wrapper_a.decrypt_and_receive(encrypted_response)
-    print("Node A received response:", received_response)
+    print("Message Type:", message_type)
     print("Response Header:", response_header)
+    print("Node A received response:", received_response)
+    
 
 if __name__ == "__main__":
     main()
