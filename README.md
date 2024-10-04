@@ -1,6 +1,6 @@
 # SilentProtocol
 
-SilentProtocol is a TCP-based, bidirectional communication protocol designed to facilitate secure and reliable data exchange without predefined server or client roles. This project leverages modern cryptographic techniques and error correction methods to ensure data integrity and confidentiality.
+SilentProtocol is a flexible, TCP-based, bidirectional communication protocol designed to facilitate secure and reliable data exchange without predefined server or client roles. This project leverages modern cryptographic techniques and error correction methods to ensure data integrity and confidentiality.
 
 ## Work in progres
 **This protocol is very work in progress**
