@@ -124,11 +124,9 @@ def process_initial_pow_packet(decoded_bytes):
         print("Invalid initial PoW packet.")
         return
 
-    # Extract the public key bytes and packet size limit
+    # Extract the public key bytes
     public_key_bytes = decoded_bytes[:91]  # Assuming public key is 91 bytes
-    packet_size_limit = struct.unpack('!I', decoded_bytes[91:hpw_index])[0]
     print("Peer Public Key:", public_key_bytes.hex())
-    print("Packet Size Limit:", packet_size_limit)
 
 def process_pow_challenge_packet(decoded_bytes):
     print("PoW Challenge Packet")
@@ -146,22 +144,24 @@ def process_pow_challenge_packet(decoded_bytes):
 
 def process_handshake_request_packet(decoded_bytes):
     print("Handshake Request Packet")
-    # Find the position of the HANDSHAKE_FLAG to separate the public key and the proof
+    # Find the position of the HANDSHAKE_FLAG to separate the public key, max packet size, and the proof
     hsk_index = decoded_bytes.find(b'HSK')
     if hsk_index == -1:
         print("Invalid handshake request.")
         return
 
-    # Extract the public key bytes and the proof of work solution
-    peer_public_key_bytes = decoded_bytes[:hsk_index]
+    # Extract the public key bytes, max packet size, and the proof of work solution
+    peer_public_key_bytes = decoded_bytes[:91]  # Assuming public key is 91 bytes
+    max_packet_size = struct.unpack('!I', decoded_bytes[91:hsk_index])[0]
     proof_bytes = decoded_bytes[hsk_index + len(b'HSK'):]
-    
+
     # Check if the proof length is within the acceptable limit
     if len(proof_bytes) > MAX_PROOF_LENGTH:
         print("Proof of work solution is too long, possible attack.")
         return
 
     print("Peer Public Key:", peer_public_key_bytes.hex())
+    print("Max Packet Size:", max_packet_size)
     print("Proof of Work Solution:", proof_bytes.hex())
 
 def process_handshake_response_packet(decoded_bytes):
@@ -173,7 +173,7 @@ def process_handshake_response_packet(decoded_bytes):
         return
 
     # Extract the public key bytes and the encrypted handshake data
-    peer_public_key_bytes = decoded_bytes[:hsr_index]
+    peer_public_key_bytes = decoded_bytes[:91]  # Assuming public key is 91 bytes
     encrypted_data_start = hsr_index + len(b'HSR')
     nonce = decoded_bytes[encrypted_data_start:encrypted_data_start + 12]
     encrypted_handshake_data = decoded_bytes[encrypted_data_start + 12:]
@@ -196,3 +196,4 @@ if __name__ == "__main__":
 
     input_string = sys.argv[1]
     decode_packet(input_string)
+
