@@ -161,7 +161,7 @@ def process_handshake_request_packet(decoded_bytes):
         return
 
     print("Peer Public Key:", peer_public_key_bytes.hex())
-    print("Max Packet Size:", max_packet_size)
+    print("Initiator max Packet Size:", max_packet_size)
     print("Proof of Work Solution:", proof_bytes.hex())
 
 def process_handshake_response_packet(decoded_bytes):
