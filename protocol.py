@@ -7,7 +7,9 @@ import os
 import json
 import struct
 import time
+import zlib
 from hamming import encode_binary_string, decode_binary_string, binary_string_to_bytes, bytes_to_binary_string
+
 
 HANDSHAKE_FLAG = b'HSK'  # Special flag to indicate a handshake request
 DATA_FLAG = b'DTA'       # Special flag to indicate a data message
@@ -232,8 +234,10 @@ class SilentProtocol:
             aesgcm = AESGCM(session_key)
             nonce = os.urandom(12)
 
-            # Encrypt header and data
-            header_json = json.dumps(header).encode('utf-8')
+            # Compress, then encrypt header and data
+            header_json = zlib.compress(json.dumps(header).encode('utf-8'))
+            data = zlib.compress(data)
+
             encrypted_header = aesgcm.encrypt(nonce, header_json, None)
             encrypted_data = aesgcm.encrypt(nonce, data, None)
 
@@ -266,7 +270,7 @@ class SilentProtocol:
             else:
                 print("Invalid packet type. Must be bytes or binary string.")
                 return None, None, None
-
+            
             # Decode the entire packet using Hamming code
             decoded_packet_binary_str = decode_binary_string(encoded_packet)
 
@@ -296,7 +300,7 @@ class SilentProtocol:
             ciphertext = decoded_packet[16+encrypted_header_length:]
 
             aesgcm = AESGCM(session_key)
-            header_json = aesgcm.decrypt(nonce, encrypted_header, None)
+            header_json = zlib.decompress(aesgcm.decrypt(nonce, encrypted_header, None))
             header_dict = json.loads(header_json.decode('utf-8'))
 
             # Validate header fields
@@ -309,7 +313,7 @@ class SilentProtocol:
                 print("Request is older than 1 minute.")
                 return None, None, None
 
-            plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+            plaintext = zlib.decompress(aesgcm.decrypt(nonce, ciphertext, None))
 
             return plaintext, header_dict, flag
         except InvalidSignature:
