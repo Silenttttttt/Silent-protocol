@@ -66,10 +66,12 @@ Contributions are welcome! Feel free to open issues or submit pull requests, or 
 
 ## Packets Type and Structure
 
+# Everything should be type bytes
+
 | Flag | Packet Type | Description | Structure |
 |------|-------------|-------------|-----------|
 | HPW | Initiator PoW Request | Sent by the initiator to request a PoW challenge, includes public key and packet size limit. | public_key_bytes + HPW_FLAG + packet_size_limit |
-| HPR | Responder PoW Challenge | Sent by the responder, includes nonce and difficulty level for the PoW challenge. | nonce + HPR_FLAG + difficulty.to_bytes(1, 'big') |
+| HPR | Responder PoW Challenge | Sent by the responder, includes nonce and difficulty level for the PoW challenge. | nonce + HPR_FLAG + difficulty|
 | HSK | Handshake Request | Sent by the initiator after solving the PoW, includes public key and proof of work solution. | public_key_bytes + HANDSHAKE_FLAG + proof_bytes |
 | HSR | Handshake Response | Sent by the responder, includes public key, session ID, and encrypted session data. | public_key_bytes + HANDSHAKE_RESPONSE_FLAG + nonce + encrypted_handshake_data + packet_size_limit |
 | DTA | Data Packet | Used for sending encrypted data between nodes, includes session ID, nonce, and encrypted payload. | session_id + DATA_FLAG + nonce + encrypted_header_length + encrypted_header + encrypted_data |
