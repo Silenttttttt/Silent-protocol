@@ -42,32 +42,26 @@ def calculate_padding(data_length):
     # Add 4 bits for encoding the padding length itself
     return padding_length + 4
 
-def estimate_packet_size_upper_bound(header, data):
+def estimate_packet_size_upper_bound(header_bytes, data_bytes):
     """
     Estimate the upper bound of the total packet size based on header and data lengths.
 
     Args:
-        header (dict): The header data.
-        data (bytes): The data to be sent.
+        header_bytes (bytes): The header data as bytes.
+        data_bytes (bytes): The data to be sent as bytes.
 
     Returns:
         int: The estimated upper bound of the total packet size in bytes.
     """
 
-    # Convert header to JSON and encode
-    header_json = json.dumps(header).encode('utf-8')
-
-
-    safety_margin = 1.1 # 10% extra space for imperfections in estimation
+    safety_margin = 1.1  # 10% extra space for imperfections in estimation
 
     header_compression_ratio = 0.95
-
-    # Assume minimal compression (e.g., 90% of original size)
     compression_ratio = 0.9
 
     # Estimate sizes after minimal compression
-    estimated_compressed_header_length = int(len(header_json) * header_compression_ratio)
-    estimated_compressed_data_length = int(len(data) * compression_ratio)
+    estimated_compressed_header_length = int(len(header_bytes) * header_compression_ratio)
+    estimated_compressed_data_length = int(len(data_bytes) * compression_ratio)
 
     # Calculate total length before Hamming encoding
     total_length_before_hamming = (
@@ -100,6 +94,7 @@ def estimate_packet_size_upper_bound(header, data):
 
 
 
+
 def test_hamming_length_estimation():
     # Test data of various lengths
     test_data_lengths = [1, 4, 7, 10, 16, 32, 64, 128, 256, 512, 1024, 100000]
@@ -126,20 +121,20 @@ def test_hamming_length_estimation():
 
 # Example usage
 if __name__ == "__main__":
-    header = {"timestamp": 1234567890, "encoding": "utf-8", "content_type": "text"}
+    header = str({"timestamp": 1234567890, "encoding": "utf-8", "content_type": "text"})
 
     # Generate random binary data of length 1000
-  #  data = os.urandom(100000)
+    data = os.urandom(100000000)
 
 
     
-    #random string of length 100000 in bytes
-    data = ''.join(random.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@#$%^&*()_+-=[];|<>,./?') for _ in range(100000)).encode('utf-8')
+    # #random string of length 100000 in bytes
+    # data = ''.join(random.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@#$%^&*()_+-=[];|<>,./?') for _ in range(100000)).encode('utf-8')
 
     # Estimate the packet size
     estimated_size = estimate_packet_size_upper_bound(header, data)
     print(f"Estimated upper bound packet size: {estimated_size} bytes")
-
+    
     # Generate the actual packet and get its size
     actual_size = generate_data_packet(data, header)
     print(f"Actual packet size: {actual_size} bytes")
