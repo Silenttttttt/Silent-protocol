@@ -77,12 +77,14 @@ class SilentProtocol:
             print(f"Session key derivation failed: {e}")
             return None
 
-    def initialize_session(self, session_id, session_key, valid_until, private_key):
+    def initialize_session(self, session_id, session_key, valid_until, private_key, max_packet_size_a, max_packet_size_b):
         self.sessions[session_id] = {
             'session_key': session_key,
             'valid_until': valid_until,
-            'private_key': private_key
+            'private_key': private_key,
+            'max_packet_size': min(max_packet_size_a, max_packet_size_b)
         }
+
 
     def perform_handshake_request(self) -> tuple[bytes, bytes]:
         private_key, public_key = self.generate_key_pair()
@@ -94,20 +96,18 @@ class SilentProtocol:
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         
-        # Prepare the PoW request with public key, packet size limit, and HPW flag
+        # Prepare the PoW request with public key and HPW flag
         pow_request = (
             public_key_bytes +
-            struct.pack('!I', self.MAX_PACKET_SIZE) +
             HPW_FLAG
         )
         pow_request_encoded = encode_bytes_with_hamming(pow_request)
         return pow_request_encoded, private_key
 
-
     def perform_pow_challenge(self, pow_request) -> tuple[bytes, bytes]:
         pow_request = decode_bytes_with_hamming(pow_request)
         
-        # Extract public key and packet size limit based on known lengths
+        # Extract public key based on known length
     
         hpw_index = pow_request.find(HPW_FLAG)
         
@@ -115,10 +115,8 @@ class SilentProtocol:
             print("Invalid PoW request.")
             return None, None
 
-        # Extract public key and packet size limit
+        # Extract public key
         public_key_bytes = pow_request[:self.PUBLIC_KEY_SIZE]
-        packet_size_limit = struct.unpack('!I', pow_request[self.PUBLIC_KEY_SIZE:hpw_index])[0]
-        
         # Generate nonce and difficulty
         nonce = os.urandom(16)
         difficulty = self.POW_DIFFICULTY
@@ -171,14 +169,17 @@ class SilentProtocol:
                 break
             proof += 1
 
-
-
-        # Prepare the handshake request with the proof of work solution
+        # Prepare the handshake request with the proof of work solution and max packet size
         public_key_bytes = private_key.public_key().public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
-        handshake_request = public_key_bytes + HANDSHAKE_FLAG + proof_bytes
+        handshake_request = (
+            public_key_bytes +
+            struct.pack('!I', self.MAX_PACKET_SIZE) +  # Include max packet size
+            HANDSHAKE_FLAG +
+            proof_bytes
+        )
         handshake_request_encoded = encode_bytes_with_hamming(handshake_request)
         return handshake_request_encoded
 
@@ -186,14 +187,15 @@ class SilentProtocol:
 
         handshake_request = decode_bytes_with_hamming(handshake_request)
 
-        # Find the position of the HANDSHAKE_FLAG to separate the public key and the proof
+        # Find the position of the HANDSHAKE_FLAG to separate the public key, max packet size, and the proof
         hsk_index = handshake_request.find(HANDSHAKE_FLAG)
         if hsk_index == -1:
             print("Invalid handshake request.")
             return None, None, None
 
-        # Extract the public key bytes and the proof of work solution
-        peer_public_key_bytes = handshake_request[:hsk_index]
+        # Extract the public key bytes, max packet size, and the proof of work solution
+        peer_public_key_bytes = handshake_request[:self.PUBLIC_KEY_SIZE]
+        max_packet_size = struct.unpack('!I', handshake_request[self.PUBLIC_KEY_SIZE:hsk_index])[0]
         proof_bytes = handshake_request[hsk_index + len(HANDSHAKE_FLAG):]
 
         # Check proof length
@@ -235,16 +237,20 @@ class SilentProtocol:
 
         session_id = os.urandom(16)
         valid_until = time.time() + self.DEFAULT_VALIDITY_PERIOD
-        self.initialize_session(session_id, session_key, valid_until, private_key)
+        self.initialize_session(session_id, session_key, valid_until, private_key, self.MAX_PACKET_SIZE, max_packet_size)
 
         # Prepare encrypted data with session ID and validity timestamp
         aesgcm = AESGCM(session_key)
         nonce = os.urandom(12)
         handshake_data = json.dumps({
             'session_id': session_id.hex(),
-            'valid_until': valid_until
+            'valid_until': valid_until,
+            'max_packet_size': self.MAX_PACKET_SIZE  # Include your own max packet size in the response, the least of the two will be the one used
         }).encode('utf-8')
         encrypted_handshake_data = aesgcm.encrypt(nonce, handshake_data, None)
+
+
+
 
         # Prepare the response
         response = (
@@ -294,8 +300,9 @@ class SilentProtocol:
 
         session_id = bytes.fromhex(handshake_data['session_id'])
         valid_until = handshake_data['valid_until']
+        max_packet_size = handshake_data['max_packet_size']
 
-        self.initialize_session(session_id, session_key, valid_until, private_key)
+        self.initialize_session(session_id, session_key, valid_until, private_key, self.MAX_PACKET_SIZE, max_packet_size)
         return session_id
 
     def create_request(self, session_id, request_data) -> bytes:
@@ -422,6 +429,7 @@ def main():
     # Initialize protocol objects for Node A and Node B
     protocol_a = SilentProtocol()
     protocol_b = SilentProtocol()
+    protocol_a.MAX_PACKET_SIZE = 1024
 
     # Node A initiates a handshake request to Node B
     pow_request, node_a_private_key = protocol_a.perform_handshake_request()
