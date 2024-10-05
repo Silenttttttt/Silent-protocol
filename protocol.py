@@ -17,6 +17,7 @@ HANDSHAKE_RESPONSE_FLAG = b'HSR'  # Special flag to indicate a handshake respons
 DATA_FLAG = b'DTA'       # Special flag to indicate a data message
 RESPONSE_FLAG = b'RTN'   # Special flag to indicate a response message
 HPW_FLAG = b'HPW'        # Special flag to indicate a handshake proof of work request
+HPW_RESPONSE_FLAG = b'HPR'  # Special flag to indicate a handshake proof of work response
 
 
 
@@ -27,7 +28,9 @@ class SilentProtocol:
     DIFFICULTY_LIMIT = 10  # Difficulty limit
     MAX_PROOF_LENGTH = 64  # Example limit for proof length
     POW_TIMEOUT = 20  # Timeout for proof of work in seconds
+    MAX_PACKET_SIZE = 8192 
 
+    PUBLIC_KEY_SIZE = 91  # Size of the public key in bytes
 
     def __init__(self):
         self.sessions = {}  # Store session information
@@ -90,32 +93,48 @@ class SilentProtocol:
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
-        # Prepare the PoW request
-        pow_request = public_key_bytes + HPW_FLAG
+        
+        # Prepare the PoW request with public key, packet size limit, and HPW flag
+        pow_request = (
+            public_key_bytes +
+            struct.pack('!I', self.MAX_PACKET_SIZE) +
+            HPW_FLAG
+        )
         pow_request_encoded = encode_bytes_with_hamming(pow_request)
         return pow_request_encoded, private_key
 
+
     def perform_pow_challenge(self, pow_request) -> tuple[bytes, bytes]:
         pow_request = decode_bytes_with_hamming(pow_request)
-        if not pow_request.endswith(HPW_FLAG):
+        
+        # Extract public key and packet size limit based on known lengths
+    
+        hpw_index = pow_request.find(HPW_FLAG)
+        
+        if hpw_index == -1:
             print("Invalid PoW request.")
             return None, None
 
-        peer_public_key_bytes = pow_request[:-len(HPW_FLAG)]
+        # Extract public key and packet size limit
+        public_key_bytes = pow_request[:self.PUBLIC_KEY_SIZE]
+        packet_size_limit = struct.unpack('!I', pow_request[self.PUBLIC_KEY_SIZE:hpw_index])[0]
+        
+        # Generate nonce and difficulty
         nonce = os.urandom(16)
         difficulty = self.POW_DIFFICULTY
 
         # Store the nonce and its metadata
-        self.nonce_store[peer_public_key_bytes] = {
+        self.nonce_store[public_key_bytes] = {
             'nonce': nonce,
             'difficulty': difficulty,
             'timestamp': time.time()
         }
 
-        # Prepare the PoW challenge
-        pow_challenge = nonce + HPW_FLAG + difficulty.to_bytes(1, 'big')
+        # Prepare the PoW challenge with the new response flag
+        pow_challenge = nonce + HPW_RESPONSE_FLAG + difficulty.to_bytes(1, 'big')
         pow_challenge_encoded = encode_bytes_with_hamming(pow_challenge)
-        return pow_challenge_encoded, peer_public_key_bytes
+        return pow_challenge_encoded, public_key_bytes
+
 
     def verify_pow(self, nonce, proof, difficulty) -> bool:
         hash_result = hashlib.sha256(nonce + proof).hexdigest()
@@ -125,14 +144,14 @@ class SilentProtocol:
 
         pow_challenge = decode_bytes_with_hamming(pow_challenge)
         # Check if the challenge contains the correct structure
-        hpw_index = pow_challenge.find(HPW_FLAG)
+        hpw_index = pow_challenge.find(HPW_RESPONSE_FLAG)
         if hpw_index == -1:
             print("Invalid PoW challenge structure.")
             return None
 
         # Extract the nonce and difficulty from the challenge
         nonce = pow_challenge[:hpw_index]
-        difficulty = pow_challenge[hpw_index + len(HPW_FLAG)]
+        difficulty = pow_challenge[hpw_index + len(HPW_RESPONSE_FLAG)]
 
 
         if difficulty > self.DIFFICULTY_LIMIT:

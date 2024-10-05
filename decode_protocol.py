@@ -16,9 +16,9 @@ def decode_packet(input_data):
                 process_data_packet(decoded_bytes)
             elif decoded_bytes[16:19] == b'RTN':
                 process_response_packet(decoded_bytes)
-            elif decoded_bytes.endswith(b'HPW'):
-                process_initial_pow_packet(decoded_bytes)
             elif b'HPW' in decoded_bytes:
+                process_initial_pow_packet(decoded_bytes)
+            elif b'HPR' in decoded_bytes:
                 process_pow_challenge_packet(decoded_bytes)
             elif b'HSK' in decoded_bytes:
                 if is_handshake_request(decoded_bytes):
@@ -118,26 +118,29 @@ def process_response_packet(decoded_bytes):
 
 def process_initial_pow_packet(decoded_bytes):
     print("Initial PoW Packet")
-    # Check if HPW is at the end
-    if not decoded_bytes.endswith(b'HPW'):
+    # Find the position of the HPW flag to separate the public key and packet size limit
+    hpw_index = decoded_bytes.find(b'HPW')
+    if hpw_index == -1:
         print("Invalid initial PoW packet.")
         return
 
-    # Extract the public key bytes
-    peer_public_key_bytes = decoded_bytes[:-len(b'HPW')]
-    print("Peer Public Key:", peer_public_key_bytes.hex())
+    # Extract the public key bytes and packet size limit
+    public_key_bytes = decoded_bytes[:91]  # Assuming public key is 91 bytes
+    packet_size_limit = struct.unpack('!I', decoded_bytes[91:hpw_index])[0]
+    print("Peer Public Key:", public_key_bytes.hex())
+    print("Packet Size Limit:", packet_size_limit)
 
 def process_pow_challenge_packet(decoded_bytes):
     print("PoW Challenge Packet")
-    # Find the position of the HPW flag to separate the nonce and difficulty
-    hpw_index = decoded_bytes.find(b'HPW')
-    if hpw_index == -1:
+    # Find the position of the HPR flag to separate the nonce and difficulty
+    hpr_index = decoded_bytes.find(b'HPR')
+    if hpr_index == -1:
         print("Invalid PoW challenge packet.")
         return
 
     # Extract the nonce and difficulty
-    nonce = decoded_bytes[:hpw_index]
-    difficulty = decoded_bytes[hpw_index + len(b'HPW')]
+    nonce = decoded_bytes[:hpr_index]
+    difficulty = decoded_bytes[hpr_index + len(b'HPR')]
     print("Nonce:", nonce.hex())
     print("Difficulty:", difficulty)
 
