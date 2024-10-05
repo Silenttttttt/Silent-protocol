@@ -1,4 +1,4 @@
-from protocol import SilentProtocol, HANDSHAKE_FLAG, DATA_FLAG, RESPONSE_FLAG, binary_string_to_bytes
+from protocol import SilentProtocol, HANDSHAKE_FLAG, DATA_FLAG, RESPONSE_FLAG
 import json
 
 
