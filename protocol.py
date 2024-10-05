@@ -9,8 +9,8 @@ import struct
 import time
 import zlib
 import hashlib
-from hamming import encode_binary_string, decode_binary_string, binary_string_to_bytes, bytes_to_binary_string
-
+#from hamming import encode_binary_string, decode_binary_string, binary_string_to_bytes, bytes_to_binary_string
+from c_hamming import encode_bytes_with_hamming, decode_bytes_with_hamming
 
 HANDSHAKE_FLAG = b'HSK'  # Special flag to indicate a handshake request
 DATA_FLAG = b'DTA'       # Special flag to indicate a data message
@@ -87,9 +87,11 @@ class SilentProtocol:
         )
         # Prepare the PoW request
         pow_request = public_key_bytes + HPW_FLAG
-        return pow_request, private_key
+        pow_request_encoded = encode_bytes_with_hamming(pow_request)
+        return pow_request_encoded, private_key
 
     def perform_pow_challenge(self, pow_request) -> tuple[bytes, bytes]:
+        pow_request = decode_bytes_with_hamming(pow_request)
         if not pow_request.endswith(HPW_FLAG):
             print("Invalid PoW request.")
             return None, None
@@ -107,13 +109,16 @@ class SilentProtocol:
 
         # Prepare the PoW challenge
         pow_challenge = nonce + HPW_FLAG + difficulty.to_bytes(1, 'big')
-        return pow_challenge, peer_public_key_bytes
+        pow_challenge_encoded = encode_bytes_with_hamming(pow_challenge)
+        return pow_challenge_encoded, peer_public_key_bytes
 
     def verify_pow(self, nonce, proof, difficulty) -> bool:
         hash_result = hashlib.sha256(nonce + proof).hexdigest()
         return hash_result.startswith('0' * difficulty)
 
     def complete_handshake_request(self, pow_challenge, private_key) -> bytes:
+
+        pow_challenge = decode_bytes_with_hamming(pow_challenge)
         # Check if the challenge contains the correct structure
         hpw_index = pow_challenge.find(HPW_FLAG)
         if hpw_index == -1:
@@ -138,9 +143,13 @@ class SilentProtocol:
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         handshake_request = public_key_bytes + HANDSHAKE_FLAG + proof_bytes
-        return handshake_request
+        handshake_request_encoded = encode_bytes_with_hamming(handshake_request)
+        return handshake_request_encoded
 
     def perform_handshake_response(self, handshake_request):
+
+        handshake_request = decode_bytes_with_hamming(handshake_request)
+
         # Find the position of the HANDSHAKE_FLAG to separate the public key and the proof
         hsk_index = handshake_request.find(HANDSHAKE_FLAG)
         if hsk_index == -1:
@@ -207,12 +216,16 @@ class SilentProtocol:
             encrypted_handshake_data
         )
 
-        return response, private_key, session_id
+        response_encoded = encode_bytes_with_hamming(response)
 
-    def complete_handshake(self, response, private_key):
+        return response_encoded, private_key, session_id
+
+    def complete_handshake(self, response, private_key) -> bytes:
         if not response:
             print("Response is empty.")
             return None
+
+        response = decode_bytes_with_hamming(response)
 
         # Find the position of the HSK flag to separate the public key and the encrypted data
         hsk_index = response.find(HANDSHAKE_FLAG)
@@ -243,7 +256,7 @@ class SilentProtocol:
         self.initialize_session(session_id, session_key, valid_until, private_key)
         return session_id
 
-    def create_request(self, session_id, request_data) -> str:
+    def create_request(self, session_id, request_data) -> bytes:
         header = {
             "timestamp": int(time.time()),
             "encoding": 'utf-8',
@@ -251,7 +264,7 @@ class SilentProtocol:
         }
         return self.encrypt_data(session_id, request_data, header, flag=DATA_FLAG)
 
-    def create_response(self, session_id, response_data, response_code=200) -> str:
+    def create_response(self, session_id, response_data, response_code=200) -> bytes:
         header = {
             "timestamp": int(time.time()),
             "encoding": 'utf-8',
@@ -260,7 +273,7 @@ class SilentProtocol:
         }
         return self.encrypt_data(session_id, response_data, header, flag=RESPONSE_FLAG)
 
-    def encrypt_data(self, session_id, data, header, flag) -> str:
+    def encrypt_data(self, session_id, data, header, flag) -> bytes:
         try:
             # Validate header
             if not all(k in header for k in ("timestamp", "encoding", "content_type")):
@@ -290,11 +303,8 @@ class SilentProtocol:
             encrypted_header_length = struct.pack('!I', len(encrypted_header))
             packet = session_id + flag + nonce + encrypted_header_length + encrypted_header + encrypted_data
 
-            # Convert packet to binary string
-            packet_binary_str = ''.join(format(byte, '08b') for byte in packet)
-
             # Encode the entire packet using Hamming code
-            encoded_packet = encode_binary_string(packet_binary_str)
+            encoded_packet = encode_bytes_with_hamming(packet)
 
             # Return the encoded binary string
             return encoded_packet
@@ -309,19 +319,12 @@ class SilentProtocol:
     def decrypt_data(self, packet):
         try:
             # Check if packet is a binary string or bytes and convert accordingly
-            if isinstance(packet, bytes):
-                encoded_packet = bytes_to_binary_string(packet)
-            elif isinstance(packet, str):
-                encoded_packet = packet
-            else:
+            if not isinstance(packet, bytes):
                 print("Invalid packet type. Must be bytes or binary string.")
                 return None, None, None
             
             # Decode the entire packet using Hamming code
-            decoded_packet_binary_str = decode_binary_string(encoded_packet)
-
-            # Convert binary string back to bytes
-            decoded_packet = bytes(int(decoded_packet_binary_str[i:i+8], 2) for i in range(0, len(decoded_packet_binary_str), 8))
+            decoded_packet = decode_bytes_with_hamming(packet)
 
             session_id = decoded_packet[:16]
             flag = decoded_packet[16:19]
@@ -452,6 +455,7 @@ def main():
     print("Response Header:", response_header)
     print("Decrypted response:", decrypted_response.decode(response_header['encoding']))
 
+    assert decrypted_response.decode(response_header['encoding']) == response_data.decode('utf-8')
 
 if __name__ == "__main__":
     main()
