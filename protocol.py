@@ -76,7 +76,7 @@ class SilentProtocol:
             'private_key': private_key
         }
 
-    def perform_handshake_request(self):
+    def perform_handshake_request(self) -> tuple[bytes, bytes]:
         private_key, public_key = self.generate_key_pair()
         if not private_key or not public_key:
             print("Failed to generate key pair for handshake.")
@@ -89,7 +89,7 @@ class SilentProtocol:
         pow_request = public_key_bytes + HPW_FLAG
         return pow_request, private_key
 
-    def perform_pow_challenge(self, pow_request):
+    def perform_pow_challenge(self, pow_request) -> tuple[bytes, bytes]:
         if not pow_request.endswith(HPW_FLAG):
             print("Invalid PoW request.")
             return None, None
@@ -109,11 +109,11 @@ class SilentProtocol:
         pow_challenge = nonce + HPW_FLAG + difficulty.to_bytes(1, 'big')
         return pow_challenge, peer_public_key_bytes
 
-    def verify_pow(self, nonce, proof, difficulty):
+    def verify_pow(self, nonce, proof, difficulty) -> bool:
         hash_result = hashlib.sha256(nonce + proof).hexdigest()
         return hash_result.startswith('0' * difficulty)
 
-    def complete_handshake_request(self, pow_challenge, private_key):
+    def complete_handshake_request(self, pow_challenge, private_key) -> bytes:
         # Check if the challenge contains the correct structure
         hpw_index = pow_challenge.find(HPW_FLAG)
         if hpw_index == -1:

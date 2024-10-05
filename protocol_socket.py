@@ -19,17 +19,23 @@ class SocketProtocolWrapper:
         print(f"Connection established with {address}")
 
         try:
-            # Receive handshake request from client
+            # Receive PoW request from client
+            pow_request = connection.recv(4096)
+            print("Received PoW request")
+            pow_challenge = self.protocol_wrapper.respond_handshake(pow_request)
+            print("Sending PoW challenge")
+            connection.sendall(pow_challenge)
+
+            # Receive handshake request with PoW solution
             handshake_request = connection.recv(4096)
-            print("Received handshake request")
-            response = binary_string_to_bytes(self.protocol_wrapper.respond_handshake(handshake_request))
+            print("Received handshake request with PoW solution")
+            response = self.protocol_wrapper.perform_handshake_response(handshake_request)
             print("Sending handshake response")
             connection.sendall(response)
 
             while True:
                 # Receive data from client
                 data = connection.recv(4096)
-               
                 if not data:
                     break
                 print("Received data")
@@ -53,11 +59,17 @@ class SocketProtocolWrapper:
         print(f"Connected to server at {self.host}:{self.port}")
 
         try:
-            # Initiate handshake with server
-            handshake_request = self.protocol_wrapper.create_handshake_request()
-            print(len(handshake_request))
-            print("Sending handshake request")
-            client_socket.sendall(binary_string_to_bytes(handshake_request))
+            # Initiate PoW request with server
+            pow_request = self.protocol_wrapper.create_handshake_request()
+            print("Sending PoW request")
+            client_socket.sendall(pow_request)
+
+            # Receive PoW challenge from server
+            print("Receiving PoW challenge")
+            pow_challenge = client_socket.recv(4096)
+            handshake_request = self.protocol_wrapper.complete_handshake_request(pow_challenge)
+            print("Sending handshake request with PoW solution")
+            client_socket.sendall(handshake_request)
 
             # Receive handshake response from server
             print("Receiving handshake response")
@@ -89,7 +101,7 @@ class SocketProtocolWrapper:
 def main():
 
     host = '0.0.0.0'
-    port = 12345
+    port = 12346
 
     if len(sys.argv) != 2:
         wrapper = SocketProtocolWrapper(host=host, port=port)  # Use '0.0.0.0' to listen on all interfaces

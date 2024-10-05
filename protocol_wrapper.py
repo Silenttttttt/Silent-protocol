@@ -10,14 +10,28 @@ class ProtocolWrapper:
 
     def create_handshake_request(self):
         # Create a handshake request and store the private key
-        handshake_request, self.private_key = self.protocol.perform_handshake_request()
-        if not handshake_request:
+        pow_request, self.private_key = self.protocol.perform_handshake_request()
+        if not pow_request:
             raise Exception("Failed to initiate handshake request.")
         if self.private_key is None:
             raise Exception("Private key was not generated.")
+        return pow_request
+
+    def respond_handshake(self, pow_request):
+        # Respond to a PoW request and generate a new private key
+        pow_challenge, peer_public_key_bytes = self.protocol.perform_pow_challenge(pow_request)
+        if not pow_challenge:
+            raise Exception("Failed to create PoW challenge.")
+        return pow_challenge
+
+    def complete_handshake_request(self, pow_challenge):
+        # Complete the handshake request with PoW solution
+        handshake_request = self.protocol.complete_handshake_request(pow_challenge, self.private_key)
+        if not handshake_request:
+            raise Exception("Failed to complete handshake request.")
         return handshake_request
 
-    def respond_handshake(self, handshake_request):
+    def perform_handshake_response(self, handshake_request):
         # Respond to a handshake request and generate a new private key
         response, self.private_key, self.session_id = self.protocol.perform_handshake_response(handshake_request)
         if not response:
@@ -78,18 +92,26 @@ class ProtocolWrapper:
 
 
 def main():
-    print("=== Testing ProtocolWrapper ===")
+    print("=== Testing ProtocolWrapper with PoW ===")
 
     # Initialize wrapper objects for Node A and Node B
     wrapper_a = ProtocolWrapper()
     wrapper_b = ProtocolWrapper()
 
-    # Node A creates a handshake request
-    handshake_request = wrapper_a.create_handshake_request()
-    print(f"Node A created handshake request")
+    # Node A creates a PoW request
+    pow_request = wrapper_a.create_handshake_request()
+    print(f"Node A created PoW request")
 
-    # Node B responds to the handshake request
-    response = wrapper_b.respond_handshake(handshake_request)
+    # Node B responds with a PoW challenge
+    pow_challenge = wrapper_b.respond_handshake(pow_request)
+    print(f"Node B created PoW challenge")
+
+    # Node A completes the handshake request with PoW solution
+    handshake_request = wrapper_a.complete_handshake_request(pow_challenge)
+    print(f"Node A completed handshake request with PoW solution")
+
+    # Node B processes the handshake request and responds
+    response = wrapper_b.perform_handshake_response(handshake_request)
     print(f"Node B created handshake response")
 
     # Node A completes the handshake using the response
@@ -105,7 +127,7 @@ def main():
     print("Message Type:", message_type)
     print("Request Header:", request_header)
     print("Node B received request:", received_request)
-    
+
     response_data = {"data": "Here is your data"}
     encrypted_response = wrapper_b.encrypt_and_send(response_data, RESPONSE_FLAG)
     print(f"Node B sends encrypted response")
@@ -115,7 +137,6 @@ def main():
     print("Message Type:", message_type)
     print("Response Header:", response_header)
     print("Node A received response:", received_response)
-    
 
 if __name__ == "__main__":
     main()
