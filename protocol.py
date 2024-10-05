@@ -13,6 +13,7 @@ import hashlib
 from c_hamming import encode_bytes_with_hamming, decode_bytes_with_hamming
 
 HANDSHAKE_FLAG = b'HSK'  # Special flag to indicate a handshake request
+HANDSHAKE_RESPONSE_FLAG = b'HSR'  # Special flag to indicate a handshake response
 DATA_FLAG = b'DTA'       # Special flag to indicate a data message
 RESPONSE_FLAG = b'RTN'   # Special flag to indicate a response message
 HPW_FLAG = b'HPW'        # Special flag to indicate a handshake proof of work request
@@ -23,6 +24,10 @@ class SilentProtocol:
     DEFAULT_VALIDITY_PERIOD = 3600  # Default validity period of 1 hour
     POW_DIFFICULTY = 4  # Number of leading zeros required in the hash
     NONCE_VALIDITY_PERIOD = 60  # Nonce validity period of 1 minute
+    DIFFICULTY_LIMIT = 10  # Difficulty limit
+    MAX_PROOF_LENGTH = 64  # Example limit for proof length
+    POW_TIMEOUT = 20  # Timeout for proof of work in seconds
+
 
     def __init__(self):
         self.sessions = {}  # Store session information
@@ -129,13 +134,25 @@ class SilentProtocol:
         nonce = pow_challenge[:hpw_index]
         difficulty = pow_challenge[hpw_index + len(HPW_FLAG)]
 
-        # Perform proof of work
+
+        if difficulty > self.DIFFICULTY_LIMIT:
+            raise Exception("Difficulty too high.")
+        
+
+        # Perform proof of work with timeout
         proof = 0
+        start_time = time.time()
         while True:
+            if time.time() - start_time > self.POW_TIMEOUT:
+                print("Proof of work timed out.")
+                return None
+
             proof_bytes = proof.to_bytes((proof.bit_length() + 7) // 8, byteorder='big')
-            if self.verify_pow(nonce, proof_bytes, difficulty):
+            if len(proof_bytes) <= self.MAX_PROOF_LENGTH and self.verify_pow(nonce, proof_bytes, difficulty):
                 break
             proof += 1
+
+
 
         # Prepare the handshake request with the proof of work solution
         public_key_bytes = private_key.public_key().public_bytes(
@@ -159,6 +176,11 @@ class SilentProtocol:
         # Extract the public key bytes and the proof of work solution
         peer_public_key_bytes = handshake_request[:hsk_index]
         proof_bytes = handshake_request[hsk_index + len(HANDSHAKE_FLAG):]
+
+        # Check proof length
+        if len(proof_bytes) > self.MAX_PROOF_LENGTH:
+            print("Proof of work solution is too long, possible attack.")
+            return None, None, None
 
         # Retrieve the correct nonce and difficulty
         nonce_data = self.nonce_store.get(peer_public_key_bytes)
@@ -211,7 +233,7 @@ class SilentProtocol:
                 encoding=serialization.Encoding.DER,
                 format=serialization.PublicFormat.SubjectPublicKeyInfo
             ) +
-            HANDSHAKE_FLAG +
+            HANDSHAKE_RESPONSE_FLAG +  # Use HSR instead of HSK
             nonce +
             encrypted_handshake_data
         )
@@ -227,18 +249,19 @@ class SilentProtocol:
 
         response = decode_bytes_with_hamming(response)
 
-        # Find the position of the HSK flag to separate the public key and the encrypted data
-        hsk_index = response.find(HANDSHAKE_FLAG)
-        if hsk_index == -1:
-            print("HSK flag not found in response.")
+        # Find the position of the HSR flag to separate the public key and the encrypted data
+        hsr_index = response.find(HANDSHAKE_RESPONSE_FLAG)
+        if hsr_index == -1:
+            print("HSR flag not found in response.")
             return None
 
         # Extract the public key bytes and the encrypted handshake data
-        peer_public_key_bytes = response[:hsk_index]
-        encrypted_data_start = hsk_index + len(HANDSHAKE_FLAG)
+        peer_public_key_bytes = response[:hsr_index]
+        encrypted_data_start = hsr_index + len(HANDSHAKE_RESPONSE_FLAG)
         nonce = response[encrypted_data_start:encrypted_data_start + 12]
         encrypted_handshake_data = response[encrypted_data_start + 12:]
 
+        #derive shared secret and session key
         shared_secret = self.exchange_keys(private_key, peer_public_key_bytes)
         session_key = self.derive_session_key(shared_secret)
         if not session_key:
