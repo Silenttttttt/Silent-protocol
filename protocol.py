@@ -8,20 +8,25 @@ import json
 import struct
 import time
 import zlib
+import hashlib
 from hamming import encode_binary_string, decode_binary_string, binary_string_to_bytes, bytes_to_binary_string
 
 
 HANDSHAKE_FLAG = b'HSK'  # Special flag to indicate a handshake request
 DATA_FLAG = b'DTA'       # Special flag to indicate a data message
 RESPONSE_FLAG = b'RTN'   # Special flag to indicate a response message
+HPW_FLAG = b'HPW'        # Special flag to indicate a handshake proof of work request
 
 
 
 class SilentProtocol:
     DEFAULT_VALIDITY_PERIOD = 3600  # Default validity period of 1 hour
+    POW_DIFFICULTY = 4  # Number of leading zeros required in the hash
+    NONCE_VALIDITY_PERIOD = 60  # Nonce validity period of 1 minute
 
     def __init__(self):
         self.sessions = {}  # Store session information
+        self.nonce_store = {}  # Store handshake proof of work nonces and their metadata
 
     def generate_key_pair(self):
         try:
@@ -80,35 +85,93 @@ class SilentProtocol:
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
-        # Prepare the handshake request
-        handshake_request = public_key_bytes + HANDSHAKE_FLAG
-        handshake_request_binary = bytes_to_binary_string(handshake_request)
-        encoded_request_binary = encode_binary_string(handshake_request_binary)
-    #    encoded_request = binary_string_to_bytes(encoded_request_binary)
+        # Prepare the PoW request
+        pow_request = public_key_bytes + HPW_FLAG
+        return pow_request, private_key
 
+    def perform_pow_challenge(self, pow_request):
+        if not pow_request.endswith(HPW_FLAG):
+            print("Invalid PoW request.")
+            return None, None
 
-        return encoded_request_binary, private_key
+        peer_public_key_bytes = pow_request[:-len(HPW_FLAG)]
+        nonce = os.urandom(16)
+        difficulty = self.POW_DIFFICULTY
+
+        # Store the nonce and its metadata
+        self.nonce_store[peer_public_key_bytes] = {
+            'nonce': nonce,
+            'difficulty': difficulty,
+            'timestamp': time.time()
+        }
+
+        # Prepare the PoW challenge
+        pow_challenge = nonce + HPW_FLAG + difficulty.to_bytes(1, 'big')
+        return pow_challenge, peer_public_key_bytes
+
+    def verify_pow(self, nonce, proof, difficulty):
+        hash_result = hashlib.sha256(nonce + proof).hexdigest()
+        return hash_result.startswith('0' * difficulty)
+
+    def complete_handshake_request(self, pow_challenge, private_key):
+        # Check if the challenge contains the correct structure
+        hpw_index = pow_challenge.find(HPW_FLAG)
+        if hpw_index == -1:
+            print("Invalid PoW challenge structure.")
+            return None
+
+        # Extract the nonce and difficulty from the challenge
+        nonce = pow_challenge[:hpw_index]
+        difficulty = pow_challenge[hpw_index + len(HPW_FLAG)]
+
+        # Perform proof of work
+        proof = 0
+        while True:
+            proof_bytes = proof.to_bytes((proof.bit_length() + 7) // 8, byteorder='big')
+            if self.verify_pow(nonce, proof_bytes, difficulty):
+                break
+            proof += 1
+
+        # Prepare the handshake request with the proof of work solution
+        public_key_bytes = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        handshake_request = public_key_bytes + HANDSHAKE_FLAG + proof_bytes
+        return handshake_request
 
     def perform_handshake_response(self, handshake_request):
-        print("Handshake request: ", handshake_request)
-        # Decode using Hamming
-        if isinstance(handshake_request, bytes):
-            handshake_request_binary = bytes_to_binary_string(handshake_request)
-        elif isinstance(handshake_request, str):
-            handshake_request_binary = handshake_request
-        else:
-            print("Handshake request must be bytes or a binary string.")
-            return None, None, None
-        #print("Handshake request binary: ", handshake_request_binary)
-        # Decode the binary string using Hamming
-        decoded_request_binary = decode_binary_string(handshake_request_binary)
-        handshake_request = binary_string_to_bytes(decoded_request_binary)
-
-        if not handshake_request.endswith(HANDSHAKE_FLAG):
+        # Find the position of the HANDSHAKE_FLAG to separate the public key and the proof
+        hsk_index = handshake_request.find(HANDSHAKE_FLAG)
+        if hsk_index == -1:
             print("Invalid handshake request.")
             return None, None, None
 
-        peer_public_key_bytes = handshake_request[:-len(HANDSHAKE_FLAG)]
+        # Extract the public key bytes and the proof of work solution
+        peer_public_key_bytes = handshake_request[:hsk_index]
+        proof_bytes = handshake_request[hsk_index + len(HANDSHAKE_FLAG):]
+
+        # Retrieve the correct nonce and difficulty
+        nonce_data = self.nonce_store.get(peer_public_key_bytes)
+        if not nonce_data:
+            print("Nonce not found or expired.")
+            return None, None, None
+
+        # Check nonce validity
+        if time.time() - nonce_data['timestamp'] > self.NONCE_VALIDITY_PERIOD:
+            print("Nonce expired.")
+            del self.nonce_store[peer_public_key_bytes]
+            return None, None, None
+
+        nonce = nonce_data['nonce']
+        difficulty = nonce_data['difficulty']
+
+        # Verify PoW
+        if not self.verify_pow(nonce, proof_bytes, difficulty):
+            print("Invalid PoW solution.")
+            return None, None, None
+
+        # Proceed with key generation and session initialization
         private_key, public_key = self.generate_key_pair()
         shared_secret = self.exchange_keys(private_key, peer_public_key_bytes)
         if not shared_secret:
@@ -133,7 +196,7 @@ class SilentProtocol:
         }).encode('utf-8')
         encrypted_handshake_data = aesgcm.encrypt(nonce, handshake_data, None)
 
-      # Prepare the response
+        # Prepare the response
         response = (
             public_key.public_bytes(
                 encoding=serialization.Encoding.DER,
@@ -144,28 +207,11 @@ class SilentProtocol:
             encrypted_handshake_data
         )
 
-        # Convert to binary string and encode using Hamming
-        response_binary = bytes_to_binary_string(response)
-        encoded_response_binary = encode_binary_string(response_binary)
-        #encoded_response = binary_string_to_bytes(encoded_response_binary)
-
-        return encoded_response_binary, private_key, session_id
+        return response, private_key, session_id
 
     def complete_handshake(self, response, private_key):
         if not response:
             print("Response is empty.")
-            return None
-
-        # Decode using Hamming
-        if isinstance(response, bytes):
-            response_binary = bytes_to_binary_string(response)
-            decoded_response_binary = decode_binary_string(response_binary)
-            response = binary_string_to_bytes(decoded_response_binary)
-        elif isinstance(response, str):
-            decoded_response_binary = decode_binary_string(response)
-            response = binary_string_to_bytes(decoded_response_binary)
-        else:
-            print("Response must be bytes or binary string, got ", type(response))
             return None
 
         # Find the position of the HSK flag to separate the public key and the encrypted data
@@ -327,26 +373,33 @@ class SilentProtocol:
 
 # Example usage
 def main():
-    print("=== Using SilentProtocol Directly ===")
+    print("=== Using SilentProtocol with PoW ===")
     # Initialize protocol objects for Node A and Node B
     protocol_a = SilentProtocol()
     protocol_b = SilentProtocol()
 
     # Node A initiates a handshake request to Node B
-    handshake_request, node_a_private_key = protocol_a.perform_handshake_request()
+    pow_request, node_a_private_key = protocol_a.perform_handshake_request()
 
-    if not handshake_request:
+    if not pow_request:
         print("Failed to perform handshake request.")
         return
 
-    # initial_handshake_request = handshake_request
-    
-    # handshake_request = binary_string_to_bytes(handshake_request)
-    # handshake_request = bytes_to_binary_string(handshake_request)
-    # print("Handshake request: ", handshake_request)
-    # assert handshake_request == initial_handshake_request
+    # Node B responds with a PoW challenge
+    pow_challenge, peer_public_key_bytes = protocol_b.perform_pow_challenge(pow_request)
 
-    # Node B responds to the handshake request
+    if not pow_challenge:
+        print("Failed to perform PoW challenge.")
+        return
+
+    # Node A completes the handshake request with PoW solution
+    handshake_request = protocol_a.complete_handshake_request(pow_challenge, node_a_private_key)
+
+    if not handshake_request:
+        print("Failed to complete handshake request.")
+        return
+
+    # Node B processes the handshake request and responds
     response, node_b_private_key, session_id_b = protocol_b.perform_handshake_response(handshake_request)
 
     if not response:
@@ -359,6 +412,9 @@ def main():
     if not session_id:
         print("Failed to complete handshake.")
         return
+
+    print("Handshake completed successfully. Session ID:", session_id.hex())
+
 
     # Node A sends a request to Node B
     request_data = json.dumps({"action": "Hello world"}).encode('utf-8')
@@ -395,6 +451,7 @@ def main():
     
     print("Response Header:", response_header)
     print("Decrypted response:", decrypted_response.decode(response_header['encoding']))
+
 
 if __name__ == "__main__":
     main()
