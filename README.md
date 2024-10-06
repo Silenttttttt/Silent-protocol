@@ -84,7 +84,7 @@ The encrypted header in both Data and Response packets contains the following cr
 - **Timestamp:** The time at which the packet was created, used for validating the freshness of the data.
 - **Encoding:** Specifies the character encoding used for the data, typically 'utf-8'.
 - **Content Type:** Describes the type of content being transmitted, such as 'application/json'.
-- **Response Code (optional):** Used in response packets to indicate the status of the response (e.g., HTTP-like status codes).
+- **Response Code (required for response packet):** Used in response packets to indicate the status of the response (e.g., HTTP-like status codes).
 
 ### Explanation:
 
