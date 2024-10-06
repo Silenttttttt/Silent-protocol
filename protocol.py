@@ -35,6 +35,12 @@ class SilentProtocol:
     def __init__(self):
         self.sessions = {}  # Store session information
         self.nonce_store = {}  # Store handshake proof of work nonces and their metadata
+        self.processed_uuids = {}  # Store processed packet UUIDs with timestamps
+
+    def cleanup_uuids(self):
+        current_time = time.time()
+        # Remove UUIDs older than 1 minute
+        self.processed_uuids = {uuid: ts for uuid, ts in self.processed_uuids.items() if current_time - ts < 60}
 
     def generate_key_pair(self):
         try:
@@ -103,12 +109,11 @@ class SilentProtocol:
         )
         pow_request_encoded = encode_bytes_with_hamming(pow_request)
         return pow_request_encoded, private_key
-
+    
     def perform_pow_challenge(self, pow_request) -> tuple[bytes, bytes]:
         pow_request = decode_bytes_with_hamming(pow_request)
         
         # Extract public key based on known length
-    
         hpw_index = pow_request.find(HPW_FLAG)
         
         if hpw_index == -1:
@@ -128,10 +133,11 @@ class SilentProtocol:
             'timestamp': time.time()
         }
 
-        # Prepare the PoW challenge with the new response flag
-        pow_challenge = nonce + HPW_RESPONSE_FLAG + difficulty.to_bytes(1, 'big')
+        # Prepare the PoW challenge with the public key and response flag
+        pow_challenge = public_key_bytes + nonce + HPW_RESPONSE_FLAG + difficulty.to_bytes(1, 'big')
         pow_challenge_encoded = encode_bytes_with_hamming(pow_challenge)
         return pow_challenge_encoded, public_key_bytes
+
 
 
     def verify_pow(self, nonce, proof, difficulty) -> bool:
@@ -139,22 +145,21 @@ class SilentProtocol:
         return hash_result.startswith('0' * difficulty)
 
     def complete_handshake_request(self, pow_challenge, private_key) -> bytes:
-
         pow_challenge = decode_bytes_with_hamming(pow_challenge)
-        # Check if the challenge contains the correct structure
-        hpw_index = pow_challenge.find(HPW_RESPONSE_FLAG)
+        
+        # Extract the public key, nonce, and difficulty from the challenge
+        public_key_bytes_received = pow_challenge[:self.PUBLIC_KEY_SIZE]
+        
+        hpw_index = pow_challenge.find(HPW_RESPONSE_FLAG, self.PUBLIC_KEY_SIZE)
         if hpw_index == -1:
             print("Invalid PoW challenge structure.")
             return None
 
-        # Extract the nonce and difficulty from the challenge
-        nonce = pow_challenge[:hpw_index]
+        nonce = pow_challenge[self.PUBLIC_KEY_SIZE:hpw_index]
         difficulty = pow_challenge[hpw_index + len(HPW_RESPONSE_FLAG)]
-
 
         if difficulty > self.DIFFICULTY_LIMIT:
             raise Exception("Difficulty too high.")
-        
 
         # Perform proof of work with timeout
         proof = 0
@@ -311,16 +316,35 @@ class SilentProtocol:
             "encoding": 'utf-8',
             "content_type": 'application/json'
         }
-        return self.encrypt_data(session_id, request_data, header, flag=DATA_FLAG)
+        encrypted_packet = self.encrypt_data(session_id, request_data, header, flag=DATA_FLAG)
+        if encrypted_packet is None:
+            raise Exception("Failed to create request.")
+           
 
-    def create_response(self, session_id, response_data, response_code=200) -> bytes:
+        # Derive packet UUID by hashing the encrypted packet
+        packet_uuid = hashlib.sha256(encrypted_packet).hexdigest()
+
+        # Encode the entire packet using Hamming code
+        encoded_packet = encode_bytes_with_hamming(encrypted_packet)
+
+        return encoded_packet, packet_uuid
+
+    def create_response(self, session_id, response_data, original_packet_uuid, response_code=200) -> bytes:
         header = {
             "timestamp": int(time.time()),
             "encoding": 'utf-8',
             "content_type": 'application/json',
-            "response_code": response_code
+            "response_code": response_code,
+            "packet_uuid": original_packet_uuid  # Include original packet UUID
         }
-        return self.encrypt_data(session_id, response_data, header, flag=RESPONSE_FLAG)
+        encrypted_packet = self.encrypt_data(session_id, response_data, header, flag=RESPONSE_FLAG)
+        if encrypted_packet is None:
+            raise Exception("Failed to create response.")
+
+        # Encode the entire packet using Hamming code
+        encoded_packet = encode_bytes_with_hamming(encrypted_packet)
+
+        return encoded_packet
 
     def encrypt_data(self, session_id, data, header, flag) -> bytes:
         try:
@@ -352,11 +376,7 @@ class SilentProtocol:
             encrypted_header_length = struct.pack('!I', len(encrypted_header))
             packet = session_id + flag + nonce + encrypted_header_length + encrypted_header + encrypted_data
 
-            # Encode the entire packet using Hamming code
-            encoded_packet = encode_bytes_with_hamming(packet)
-
-            # Return the encoded binary string
-            return encoded_packet
+            return packet
 
         except Exception as e:
             import traceback
@@ -364,32 +384,29 @@ class SilentProtocol:
             print(f"Encryption failed: {e}")
             return None
 
-
-    def decrypt_data(self, packet):
+    def decrypt_data_packet(self, packet: bytes) -> tuple[bytes, dict, str, str]:
         try:
-            # Check if packet is a binary string or bytes and convert accordingly
-            if not isinstance(packet, bytes):
-                print("Invalid packet type. Must be bytes or binary string.")
-                return None, None, None
-            
             # Decode the entire packet using Hamming code
             decoded_packet = decode_bytes_with_hamming(packet)
 
+            # Derive packet UUID by hashing the decoded packet
+            packet_uuid = hashlib.sha256(decoded_packet).hexdigest()
+
             session_id = decoded_packet[:16]
             flag = decoded_packet[16:19]
-            if flag not in [DATA_FLAG, RESPONSE_FLAG]:
+            if flag != DATA_FLAG:
                 print("Invalid data packet.")
-                return None, None, None
+                return None, None, None, None
 
             decoded_packet = decoded_packet[19:]  # Skip the flag
             session_info = self.sessions.get(session_id)
             if not session_info:
                 print("Session not found.")
-                return None, None, None
+                return None, None, None, None
 
             if time.time() > session_info['valid_until']:
                 print("Session expired, please perform a new handshake.")
-                return None, None, None
+                return None, None, None, None
 
             session_key = session_info['session_key']
             nonce = decoded_packet[:12]
@@ -404,24 +421,104 @@ class SilentProtocol:
             # Validate header fields
             if not all(k in header_dict for k in ("timestamp", "encoding", "content_type")):
                 print("Decrypted header must include 'timestamp', 'encoding', and 'content_type'.")
-                return None, None, None
+                return None, None, None, None
 
             # Check if the request is older than 1 minute
             if time.time() - header_dict["timestamp"] > 60:
                 print("Request is older than 1 minute.")
-                return None, None, None
+                return None, None, None, None
 
+            # Check for replay attack
+            if packet_uuid in self.processed_uuids:
+                print("Replay attack detected: Packet UUID already processed.")
+                return None, None, None, None
+
+            # Process the packet
             plaintext = zlib.decompress(aesgcm.decrypt(nonce, ciphertext, None))
 
-            return plaintext, header_dict, flag
+            # Store the UUID with the current timestamp
+            self.processed_uuids[packet_uuid] = time.time()
+
+            # Cleanup old UUIDs
+            self.cleanup_uuids()
+
+            return plaintext, header_dict, flag, packet_uuid
         except InvalidSignature:
             print("Decryption failed: Integrity check failed.")
-            return None, None, None
+            return None, None, None, None
         except Exception as e:
             import traceback
             traceback.print_exc()
             print(f"Decryption failed: {e}")
-            return None, None, None
+            return None, None, None, None
+
+    def decrypt_response_packet(self, packet: bytes) -> tuple[bytes, dict, str, str]:
+        try:
+            # Decode the entire packet using Hamming code
+            decoded_packet = decode_bytes_with_hamming(packet)
+
+            session_id = decoded_packet[:16]
+            flag = decoded_packet[16:19]
+            if flag != RESPONSE_FLAG:
+                print("Invalid response packet.")
+                return None, None, None, None
+
+            decoded_packet = decoded_packet[19:]  # Skip the flag
+            session_info = self.sessions.get(session_id)
+            if not session_info:
+                print("Session not found.")
+                return None, None, None, None
+
+            if time.time() > session_info['valid_until']:
+                print("Session expired, please perform a new handshake.")
+                return None, None, None, None
+
+            session_key = session_info['session_key']
+            nonce = decoded_packet[:12]
+            encrypted_header_length = struct.unpack('!I', decoded_packet[12:16])[0]
+            encrypted_header = decoded_packet[16:16+encrypted_header_length]
+            ciphertext = decoded_packet[16+encrypted_header_length:]
+
+            aesgcm = AESGCM(session_key)
+            header_json = zlib.decompress(aesgcm.decrypt(nonce, encrypted_header, None))
+            header_dict = json.loads(header_json.decode('utf-8'))
+
+            # Validate header fields
+            if not all(k in header_dict for k in ("timestamp", "encoding", "content_type", "packet_uuid")):
+                print("Decrypted header must include 'timestamp', 'encoding', 'content_type', and 'packet_uuid'.")
+                return None, None, None, None
+
+            # Check if the request is older than 1 minute
+            if time.time() - header_dict["timestamp"] > 60:
+                print("Request is older than 1 minute.")
+                return None, None, None, None
+
+            # Derive packet UUID from the encrypted header
+            packet_uuid = header_dict["packet_uuid"]
+
+            # Check for replay attack
+            if packet_uuid in self.processed_uuids:
+                print("Replay attack detected: Packet UUID already processed.")
+                return None, None, None, None
+
+            # Process the packet
+            plaintext = zlib.decompress(aesgcm.decrypt(nonce, ciphertext, None))
+
+            # Store the UUID with the current timestamp
+            self.processed_uuids[packet_uuid] = time.time()
+
+            # Cleanup old UUIDs
+            self.cleanup_uuids()
+
+            return plaintext, header_dict, flag, packet_uuid
+        except InvalidSignature:
+            print("Decryption failed: Integrity check failed.")
+            return None, None, None, None
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"Decryption failed: {e}")
+            return None, None, None, None
 
 # Example usage
 def main():
@@ -468,18 +565,15 @@ def main():
 
     print("Handshake completed successfully. Session ID:", session_id.hex())
 
-
     # Node A sends a request to Node B
     request_data = json.dumps({"action": "Hello world"}).encode('utf-8')
-    encrypted_request = protocol_a.create_request(session_id, request_data)
+    encrypted_request, request_uuid_a = protocol_a.create_request(session_id, request_data)
     if encrypted_request is None:
         print("Failed to send request.")
         return
 
-#    print("Encrypted request:", encrypted_request)
-
     # Node B decrypts the request and sends a response
-    decrypted_request, request_header, message_type = protocol_b.decrypt_data(encrypted_request)
+    decrypted_request, request_header, message_type, request_uuid_b = protocol_b.decrypt_data_packet(encrypted_request)
     if decrypted_request is None:
         print("Failed to decrypt request.")
         return
@@ -488,24 +582,23 @@ def main():
     print("Request Header:", request_header)
 
     response_data = json.dumps({"data": "Here is your data"}).encode('utf-8')
-    encrypted_response = protocol_b.create_response(session_id_b, response_data)
+    encrypted_response = protocol_b.create_response(session_id_b, response_data, request_uuid_b)
     if encrypted_response is None:
         print("Failed to send response.")
         return
 
-  #  print("Encrypted response:", encrypted_response)
-
     # Node A decrypts the response
-    decrypted_response, response_header, message_type = protocol_a.decrypt_data(encrypted_response)
+    decrypted_response, response_header, message_type, request_uuid_c = protocol_a.decrypt_response_packet(encrypted_response)
     if decrypted_response is None:
         print("Failed to decrypt response.")
         return
 
-    
     print("Response Header:", response_header)
     print("Decrypted response:", decrypted_response.decode(response_header['encoding']))
 
     assert decrypted_response.decode(response_header['encoding']) == response_data.decode('utf-8')
+
+    assert request_uuid_b == request_uuid_a == request_uuid_c
 
 if __name__ == "__main__":
     main()

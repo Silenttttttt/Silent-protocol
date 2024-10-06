@@ -50,47 +50,61 @@ class ProtocolWrapper:
             raise Exception("Failed to complete handshake.")
         print(f"Session ID established: {self.session_id.hex()}")
 
-    def encrypt_and_send(self, data, flag, response_code=200):
+    def send_data(self, data):
         if not self.session_id:
             raise Exception("No active session. Please initiate a handshake first.")
 
         request_data = json.dumps(data).encode('utf-8')
+        encrypted_message, packet_uuid = self.protocol.create_request(self.session_id, request_data)
 
-        if flag == DATA_FLAG:
-            encrypted_message = self.protocol.create_request(self.session_id, request_data)
-        elif flag == RESPONSE_FLAG:
-            encrypted_message = self.protocol.create_response(self.session_id, request_data, response_code)
-        else:
-            raise ValueError("Invalid flag provided. Use DATA_FLAG or RESPONSE_FLAG.")
+        if encrypted_message is None:
+            raise Exception("Failed to encrypt message.")
+
+        return encrypted_message, packet_uuid
+
+    def send_response(self, data, original_packet_uuid, response_code=200):
+        if not self.session_id:
+            raise Exception("No active session. Please initiate a handshake first.")
+
+        response_data = json.dumps(data).encode('utf-8')
+        encrypted_message = self.protocol.create_response(self.session_id, response_data, original_packet_uuid, response_code)
 
         if encrypted_message is None:
             raise Exception("Failed to encrypt message.")
 
         return encrypted_message
 
-    def decrypt_and_receive(self, encrypted_response):
+    def decrypt_data(self, encrypted_data_packet):
         if not self.session_id:
             raise Exception("No active session. Please initiate a handshake first.")
 
-        decrypted_response, response_header, flag = self.protocol.decrypt_data(encrypted_response)
+        decrypted_data, header, flag, packet_uuid = self.protocol.decrypt_data_packet(encrypted_data_packet)
+        if decrypted_data is None:
+            raise Exception("Failed to decrypt data packet.")
+
+        if flag != DATA_FLAG:
+            raise Exception("Invalid flag for data packet.")
+
+        data = json.loads(decrypted_data.decode(header['encoding']))
+        return data, header, packet_uuid
+
+    def decrypt_response(self, encrypted_response_packet):
+        if not self.session_id:
+            raise Exception("No active session. Please initiate a handshake first.")
+
+        decrypted_response, header, flag, packet_uuid = self.protocol.decrypt_response_packet(encrypted_response_packet)
         if decrypted_response is None:
-            raise Exception("Failed to decrypt response.")
+            raise Exception("Failed to decrypt response packet.")
 
-        # Determine the message type based on the flag
-        if flag == DATA_FLAG:
-            message_type = "data"
-        elif flag == RESPONSE_FLAG:
-            message_type = "response"
-        elif flag == HANDSHAKE_FLAG:
-            message_type = "handshake"
-        else:
-            message_type = "unknown"
+        if flag != RESPONSE_FLAG:
+            raise Exception("Invalid flag for response packet.")
 
-        response_data = json.loads(decrypted_response.decode(response_header['encoding']))
-        return response_data, response_header, message_type
+        response = json.loads(decrypted_response.decode(header['encoding']))
+        return response, header, packet_uuid
 
 
 
+# Example usage
 def main():
     print("=== Testing ProtocolWrapper with PoW ===")
 
@@ -119,24 +133,24 @@ def main():
 
     # Node A sends a request to Node B
     request_data = {"action": "get_data"}
-    encrypted_request = wrapper_a.encrypt_and_send(request_data, DATA_FLAG)
+    encrypted_request, request_uuid_a = wrapper_a.send_data(request_data)
     print("Node A sends encrypted request")
 
     # Node B decrypts the request and sends a response
-    received_request, request_header, message_type = wrapper_b.decrypt_and_receive(encrypted_request)
-    print("Message Type:", message_type)
+    received_request, request_header, request_uuid_b = wrapper_b.decrypt_data(encrypted_request)
     print("Request Header:", request_header)
     print("Node B received request:", received_request)
 
     response_data = {"data": "Here is your data"}
-    encrypted_response = wrapper_b.encrypt_and_send(response_data, RESPONSE_FLAG)
+    encrypted_response = wrapper_b.send_response(response_data, original_packet_uuid=request_uuid_b)
     print(f"Node B sends encrypted response")
 
     # Node A decrypts the response
-    received_response, response_header, message_type = wrapper_a.decrypt_and_receive(encrypted_response)
-    print("Message Type:", message_type)
+    received_response, response_header, request_uuid_c = wrapper_a.decrypt_response(encrypted_response)
     print("Response Header:", response_header)
     print("Node A received response:", received_response)
+
+    assert request_uuid_c == request_uuid_b == request_uuid_a
 
 if __name__ == "__main__":
     main()
