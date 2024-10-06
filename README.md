@@ -62,7 +62,51 @@ This will demonstrate the handshake and message exchange process between two nod
 
 ## Contributing
 
-Contributions are welcome! Feel free to open issues or submit pull requests to improve the project.
+Contributions are welcome! Feel free to open issues or submit pull requests, or create your own fork to improve the project.
+
+## Packets Type and Structure
+
+# Everything should be type bytes
+
+| Flag | Packet Type | Description | Structure |
+|------|-------------|-------------|-----------|
+| HPW  | Initiator PoW Request | Sent by the initiator (Node A) to request a PoW challenge, includes Node A's public key and packet size limit. | `public_key_bytes_A + HPW_FLAG + packet_size_limit` |
+| HPR  | Responder PoW Challenge | Sent by the responder (Node B), includes Node A's public key, nonce, and difficulty level for the PoW challenge. | `public_key_bytes_A + nonce + HPR_FLAG + difficulty` |
+| HSK  | Handshake Request | Sent by the initiator (Node A) after solving the PoW, includes Node A's public key and proof of work solution. | `public_key_bytes_A + HANDSHAKE_FLAG + proof_bytes` |
+| HSR  | Handshake Response | Sent by the responder (Node B), includes Node B's public key, session ID, and encrypted session data. | `public_key_bytes_B + HANDSHAKE_RESPONSE_FLAG + nonce + encrypted_handshake_data + packet_size_limit` |
+| DTA  | Data Packet | Used for sending encrypted data between nodes, includes session ID, nonce, and encrypted payload. | `session_id + DATA_FLAG + nonce + encrypted_header_length + encrypted_header + encrypted_data` |
+| RTN  | Response Packet | Used for sending encrypted responses, includes session ID, nonce, and encrypted payload. | `session_id + RESPONSE_FLAG + nonce + encrypted_header_length + encrypted_header + encrypted_data` |
+
+### Encrypted Header Information
+
+The encrypted header in both Data and Response packets contains the following critical information:
+
+- **Timestamp:** The time at which the packet was created, used for validating the freshness of the data.
+- **Encoding:** Specifies the character encoding used for the data, typically 'utf-8'.
+- **Content Type:** Describes the type of content being transmitted, such as 'application/json'.
+- **Response Code (required for response packet):** Used in response packets to indicate the status of the response (e.g., HTTP-like status codes).
+
+### Explanation:
+
+- **HPW (Handshake Proof of Work):**
+  - **Initiator PoW Request:** Contains Node A's public key, the HPW flag, and the packet size limit.
+  - **Responder PoW Challenge (HPR):** Contains Node A's public key, a nonce, the HPR flag, and the difficulty level as a byte.
+
+- **HSK (Handshake):**
+  - **Handshake Request:** Contains Node A's public key, the handshake flag, and the proof of work solution.
+
+- **HSR (Handshake Response):**
+  - **Handshake Response:** Contains Node B's public key, the handshake response flag, a nonce, encrypted session data, and the packet size limit.
+
+- **DTA (Data):**
+  - **Data Packet:** Contains the session ID, data flag, nonce, encrypted header length, encrypted header, and encrypted data. The encrypted header includes metadata like timestamp, encoding, and content type.
+
+- **RTN (Response):**
+  - **Response Packet:** Similar to the data packet, but used for responses, containing the session ID, response flag, nonce, encrypted header length, encrypted header, and encrypted data. The encrypted header may also include a response code.
+
+This table and explanation provide a comprehensive view of the packet structures, including the critical metadata contained within the encrypted headers. This information is crucial for correctly processing and interpreting the data exchanged using the SilentProtocol.
+
+
 
 ## License
 
