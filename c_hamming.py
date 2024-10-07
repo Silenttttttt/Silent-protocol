@@ -1,5 +1,4 @@
 import subprocess
-from hamming import bytes_to_binary_string, decode_binary_string
 
 def encode_bytes_with_hamming(data_bytes: bytes) -> bytes:
     """

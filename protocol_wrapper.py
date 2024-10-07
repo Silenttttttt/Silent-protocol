@@ -1,4 +1,4 @@
-from protocol import SilentProtocol, HANDSHAKE_FLAG, DATA_FLAG, RESPONSE_FLAG
+from protocol import SilentProtocol
 import json
 
 
@@ -82,7 +82,7 @@ class ProtocolWrapper:
         if decrypted_data is None:
             raise Exception("Failed to decrypt data packet.")
 
-        if flag != DATA_FLAG:
+        if flag != self.protocol.DATA_FLAG:
             raise Exception("Invalid flag for data packet.")
 
         data = json.loads(decrypted_data.decode(header['encoding']))
@@ -96,7 +96,7 @@ class ProtocolWrapper:
         if decrypted_response is None:
             raise Exception("Failed to decrypt response packet.")
 
-        if flag != RESPONSE_FLAG:
+        if flag != self.protocol.RESPONSE_FLAG:
             raise Exception("Invalid flag for response packet.")
 
         response = json.loads(decrypted_response.decode(header['encoding']))

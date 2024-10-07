@@ -1,6 +1,6 @@
 import socket
 import json
-from protocol_wrapper import ProtocolWrapper, DATA_FLAG, RESPONSE_FLAG
+from protocol_wrapper import ProtocolWrapper
 import sys
 
 

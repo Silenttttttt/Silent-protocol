@@ -9,19 +9,30 @@ import struct
 import time
 import zlib
 import hashlib
+import threading
+from collections import defaultdict
+from queue import Queue, Empty
+import traceback
 #from hamming import encode_binary_string, decode_binary_string, binary_string_to_bytes, bytes_to_binary_string
 from c_hamming import encode_bytes_with_hamming, decode_bytes_with_hamming
 
-HANDSHAKE_FLAG = b'HSK'  # Special flag to indicate a handshake request
-HANDSHAKE_RESPONSE_FLAG = b'HSR'  # Special flag to indicate a handshake response
-DATA_FLAG = b'DTA'       # Special flag to indicate a data message
-RESPONSE_FLAG = b'RTN'   # Special flag to indicate a response message
-HPW_FLAG = b'HPW'        # Special flag to indicate a handshake proof of work request
-HPW_RESPONSE_FLAG = b'HPR'  # Special flag to indicate a handshake proof of work response
-
-
 
 class SilentProtocol:
+
+
+    HANDSHAKE_FLAG = b'HSK'  # Special flag to indicate a handshake request
+    HANDSHAKE_RESPONSE_FLAG = b'HSR'  # Special flag to indicate a handshake response
+    DATA_FLAG = b'DTA'       # Special flag to indicate a data message
+    RESPONSE_FLAG = b'RTN'   # Special flag to indicate a response message
+    HPW_FLAG = b'HPW'        # Special flag to indicate a handshake proof of work request
+    HPW_RESPONSE_FLAG = b'HPR'  # Special flag to indicate a handshake proof of work response
+    DST_FLAG = b'DST' # Special flag to indicate a data stream message
+    NST_FLAG = b'NST' # Special flag to indicate a NACK not acknowledged stream message, and the other side will re-send the specified segments
+    EST_FLAG = b'EST' # Special flag to indicate that the sender should stop sending more stream messages
+    CST_FLAG = b'CST' # Special flag to indicate that the receiver is still active and wants to continue receiving stream messages
+    STR_FLAG = b'SST' # Special flag to indicate a successful stream message
+    FST_FLAG = b'FST' # Special flag to indicate a failed stream message
+
     DEFAULT_VALIDITY_PERIOD = 3600  # Default validity period of 1 hour
     POW_DIFFICULTY = 4  # Number of leading zeros required in the hash
     NONCE_VALIDITY_PERIOD = 60  # Nonce validity period of 1 minute
@@ -36,6 +47,7 @@ class SilentProtocol:
         self.sessions = {}  # Store session information
         self.nonce_store = {}  # Store handshake proof of work nonces and their metadata
         self.processed_uuids = {}  # Store processed packet UUIDs with timestamps
+        self.stream_manager = StreamManager(self)
 
     def cleanup_uuids(self):
         current_time = time.time()
@@ -105,7 +117,7 @@ class SilentProtocol:
         # Prepare the PoW request with public key and HPW flag
         pow_request = (
             public_key_bytes +
-            HPW_FLAG
+            self.HPW_FLAG
         )
         pow_request_encoded = encode_bytes_with_hamming(pow_request)
         return pow_request_encoded, private_key
@@ -114,7 +126,7 @@ class SilentProtocol:
         pow_request = decode_bytes_with_hamming(pow_request)
         
         # Extract public key based on known length
-        hpw_index = pow_request.find(HPW_FLAG)
+        hpw_index = pow_request.find(self.HPW_FLAG)
         
         if hpw_index == -1:
             print("Invalid PoW request.")
@@ -134,7 +146,7 @@ class SilentProtocol:
         }
 
         # Prepare the PoW challenge with the public key and response flag
-        pow_challenge = public_key_bytes + nonce + HPW_RESPONSE_FLAG + difficulty.to_bytes(1, 'big')
+        pow_challenge = public_key_bytes + nonce + self.HPW_RESPONSE_FLAG + difficulty.to_bytes(1, 'big')
         pow_challenge_encoded = encode_bytes_with_hamming(pow_challenge)
         return pow_challenge_encoded, public_key_bytes
 
@@ -150,13 +162,13 @@ class SilentProtocol:
         # Extract the public key, nonce, and difficulty from the challenge
         public_key_bytes_received = pow_challenge[:self.PUBLIC_KEY_SIZE]
         
-        hpw_index = pow_challenge.find(HPW_RESPONSE_FLAG, self.PUBLIC_KEY_SIZE)
+        hpw_index = pow_challenge.find(self.HPW_RESPONSE_FLAG, self.PUBLIC_KEY_SIZE)
         if hpw_index == -1:
             print("Invalid PoW challenge structure.")
             return None
 
         nonce = pow_challenge[self.PUBLIC_KEY_SIZE:hpw_index]
-        difficulty = pow_challenge[hpw_index + len(HPW_RESPONSE_FLAG)]
+        difficulty = pow_challenge[hpw_index + len(self.HPW_RESPONSE_FLAG)]
 
         if difficulty > self.DIFFICULTY_LIMIT:
             raise Exception("Difficulty too high.")
@@ -182,7 +194,7 @@ class SilentProtocol:
         handshake_request = (
             public_key_bytes +
             struct.pack('!I', self.MAX_PACKET_SIZE) +  # Include max packet size
-            HANDSHAKE_FLAG +
+            self.HANDSHAKE_FLAG +
             proof_bytes
         )
         handshake_request_encoded = encode_bytes_with_hamming(handshake_request)
@@ -192,8 +204,8 @@ class SilentProtocol:
 
         handshake_request = decode_bytes_with_hamming(handshake_request)
 
-        # Find the position of the HANDSHAKE_FLAG to separate the public key, max packet size, and the proof
-        hsk_index = handshake_request.find(HANDSHAKE_FLAG)
+        # Find the position of the self.HANDSHAKE_FLAG to separate the public key, max packet size, and the proof
+        hsk_index = handshake_request.find(self.HANDSHAKE_FLAG)
         if hsk_index == -1:
             print("Invalid handshake request.")
             return None, None, None
@@ -201,7 +213,7 @@ class SilentProtocol:
         # Extract the public key bytes, max packet size, and the proof of work solution
         peer_public_key_bytes = handshake_request[:self.PUBLIC_KEY_SIZE]
         max_packet_size = struct.unpack('!I', handshake_request[self.PUBLIC_KEY_SIZE:hsk_index])[0]
-        proof_bytes = handshake_request[hsk_index + len(HANDSHAKE_FLAG):]
+        proof_bytes = handshake_request[hsk_index + len(self.HANDSHAKE_FLAG):]
 
         # Check proof length
         if len(proof_bytes) > self.MAX_PROOF_LENGTH:
@@ -263,7 +275,7 @@ class SilentProtocol:
                 encoding=serialization.Encoding.DER,
                 format=serialization.PublicFormat.SubjectPublicKeyInfo
             ) +
-            HANDSHAKE_RESPONSE_FLAG +  # Use HSR instead of HSK
+            self.HANDSHAKE_RESPONSE_FLAG +  # Use HSR instead of HSK
             nonce +
             encrypted_handshake_data
         )
@@ -280,14 +292,14 @@ class SilentProtocol:
         response = decode_bytes_with_hamming(response)
 
         # Find the position of the HSR flag to separate the public key and the encrypted data
-        hsr_index = response.find(HANDSHAKE_RESPONSE_FLAG)
+        hsr_index = response.find(self.HANDSHAKE_RESPONSE_FLAG)
         if hsr_index == -1:
             print("HSR flag not found in response.")
             return None
 
         # Extract the public key bytes and the encrypted handshake data
         peer_public_key_bytes = response[:hsr_index]
-        encrypted_data_start = hsr_index + len(HANDSHAKE_RESPONSE_FLAG)
+        encrypted_data_start = hsr_index + len(self.HANDSHAKE_RESPONSE_FLAG)
         nonce = response[encrypted_data_start:encrypted_data_start + 12]
         encrypted_handshake_data = response[encrypted_data_start + 12:]
 
@@ -316,7 +328,7 @@ class SilentProtocol:
             "encoding": 'utf-8',
             "content_type": 'application/json'
         }
-        encrypted_packet = self.encrypt_data(session_id, request_data, header, flag=DATA_FLAG)
+        encrypted_packet = self.encrypt_data(session_id, request_data, header, flag=self.DATA_FLAG)
         if encrypted_packet is None:
             raise Exception("Failed to create request.")
            
@@ -337,7 +349,7 @@ class SilentProtocol:
             "response_code": response_code,
             "packet_uuid": original_packet_uuid  # Include original packet UUID
         }
-        encrypted_packet = self.encrypt_data(session_id, response_data, header, flag=RESPONSE_FLAG)
+        encrypted_packet = self.encrypt_data(session_id, response_data, header, flag=self.RESPONSE_FLAG)
         if encrypted_packet is None:
             raise Exception("Failed to create response.")
 
@@ -355,7 +367,7 @@ class SilentProtocol:
 
             session_info = self.sessions.get(session_id)
             if not session_info:
-                print("Session not found.")
+                print("Session not found in encrypt data.")
                 return None
 
             if time.time() > session_info['valid_until']:
@@ -379,11 +391,10 @@ class SilentProtocol:
             return packet
 
         except Exception as e:
-            import traceback
+            
             traceback.print_exc()
             print(f"Encryption failed: {e}")
             return None
-
     def decrypt_data_packet(self, packet: bytes) -> tuple[bytes, dict, str, str]:
         try:
             # Decode the entire packet using Hamming code
@@ -394,14 +405,14 @@ class SilentProtocol:
 
             session_id = decoded_packet[:16]
             flag = decoded_packet[16:19]
-            if flag != DATA_FLAG:
+            if flag != self.DATA_FLAG:
                 print("Invalid data packet.")
                 return None, None, None, None
 
             decoded_packet = decoded_packet[19:]  # Skip the flag
             session_info = self.sessions.get(session_id)
             if not session_info:
-                print("Session not found.")
+                print("Session not found decrypt data packet.")
                 return None, None, None, None
 
             if time.time() > session_info['valid_until']:
@@ -434,7 +445,10 @@ class SilentProtocol:
                 return None, None, None, None
 
             # Process the packet
-            plaintext = zlib.decompress(aesgcm.decrypt(nonce, ciphertext, None))
+            if ciphertext:
+                plaintext = zlib.decompress(aesgcm.decrypt(nonce, ciphertext, None))
+            else:
+                plaintext = b''
 
             # Store the UUID with the current timestamp
             self.processed_uuids[packet_uuid] = time.time()
@@ -444,12 +458,12 @@ class SilentProtocol:
 
             return plaintext, header_dict, flag, packet_uuid
         except InvalidSignature:
-            print("Decryption failed: Integrity check failed.")
+            print("Decryption data packet failed: Integrity check failed.")
             return None, None, None, None
         except Exception as e:
-            import traceback
+            
             traceback.print_exc()
-            print(f"Decryption failed: {e}")
+            print(f"Decryption data packet failed: {e}")
             return None, None, None, None
 
     def decrypt_response_packet(self, packet: bytes) -> tuple[bytes, dict, str, str]:
@@ -459,14 +473,14 @@ class SilentProtocol:
 
             session_id = decoded_packet[:16]
             flag = decoded_packet[16:19]
-            if flag != RESPONSE_FLAG:
+            if flag != self.RESPONSE_FLAG:
                 print("Invalid response packet.")
                 return None, None, None, None
 
             decoded_packet = decoded_packet[19:]  # Skip the flag
             session_info = self.sessions.get(session_id)
             if not session_info:
-                print("Session not found.")
+                print("Session not found decrypt response packet.")
                 return None, None, None, None
 
             if time.time() > session_info['valid_until']:
@@ -501,8 +515,10 @@ class SilentProtocol:
                 print("Replay attack detected: Packet UUID already processed.")
                 return None, None, None, None
 
-            # Process the packet
-            plaintext = zlib.decompress(aesgcm.decrypt(nonce, ciphertext, None))
+            if ciphertext:
+                plaintext = zlib.decompress(aesgcm.decrypt(nonce, ciphertext, None))
+            else:
+                plaintext = b''
 
             # Store the UUID with the current timestamp
             self.processed_uuids[packet_uuid] = time.time()
@@ -512,93 +528,564 @@ class SilentProtocol:
 
             return plaintext, header_dict, flag, packet_uuid
         except InvalidSignature:
-            print("Decryption failed: Integrity check failed.")
+            print("Decryption response packet failed: Integrity check failed.")
             return None, None, None, None
         except Exception as e:
-            import traceback
+            
             traceback.print_exc()
-            print(f"Decryption failed: {e}")
+            print(f"Decryption response packet failed: {e}")
             return None, None, None, None
+
+
+    def create_stream_packet(self, session_id, sequence_number, flags, data, stream_id=None, total_segments=None) -> bytes:
+        # If stream_id is None, derive it from the first packet's content
+        if stream_id is None:
+            stream_id = hashlib.sha256(data).digest()  # Use the full SHA-256 hash
+
+        # Validate flags and total_segments
+        if flags == 2 and total_segments is not None:
+            raise ValueError("Total segments should not be present for a continuous stream (flag 2).")
+
+        # Create a JSON header
+        header = {
+            "stream_id": stream_id.hex(),
+            "sequence_number": sequence_number,
+            "flags": flags,
+            "timestamp": int(time.time())
+        }
+        if total_segments is not None:
+            header["total_segments"] = total_segments
+        
+        # Encrypt the data with the header
+        encrypted_packet = self.encrypt_stream_data(session_id, data, header)
+        if encrypted_packet is None:
+            raise Exception("Failed to create stream packet.")
+        
+        # Encode the entire packet using Hamming code
+        encoded_packet = encode_bytes_with_hamming(encrypted_packet)
+        
+        # Store packet info in the session under the stream ID
+        session_info = self.sessions.get(session_id)
+        if session_info:
+            streams = session_info.setdefault('streams', {})
+            stream_data = streams.setdefault(stream_id, {})
+            stream_data[sequence_number] = {
+                'data': data,
+                'header': header
+            }
+        
+        return encoded_packet, stream_id, header
+
+
+    def encrypt_stream_data(self, session_id, data, header) -> bytes:
+        try:
+            session_info = self.sessions.get(session_id)
+            if not session_info:
+                print("Session not found in stream encryption.")
+                return None
+
+            if time.time() > session_info['valid_until']:
+                print("Session expired, please perform a new handshake.")
+                return None
+
+            session_key = session_info['session_key']
+            aesgcm = AESGCM(session_key)
+            nonce = os.urandom(12)
+
+            # Encrypt header and data
+            header_json = json.dumps(header).encode('utf-8')
+            encrypted_header = aesgcm.encrypt(nonce, header_json, None)
+            encrypted_data = aesgcm.encrypt(nonce, data, None)
+
+            encrypted_header_length = struct.pack('!I', len(encrypted_header))
+            packet = session_id + self.DST_FLAG + nonce + encrypted_header_length + encrypted_header + encrypted_data
+
+            return packet
+
+        except Exception as e:
+            print(f"Encryption failed: {e}")
+            return None
+
+    def decrypt_stream_packet(self, packet: bytes) -> tuple[bytes, dict, str]:
+        try:
+            # Decode the entire packet using Hamming code
+            decoded_packet = decode_bytes_with_hamming(packet)
+
+            session_id = decoded_packet[:16]
+            flag = decoded_packet[16:19]
+            if flag not in [self.DST_FLAG, self.EST_FLAG, self.CST_FLAG]:
+                print("Invalid stream packet.")
+                return None, None, None
+
+            decoded_packet = decoded_packet[19:]  # Skip the flag
+            session_info = self.sessions.get(session_id)
+            if not session_info:
+                print("Session decrypt not found in stream decrypt packet.")
+                return None, None, None
+
+            if time.time() > session_info['valid_until']:
+                print("Session expired, please perform a new handshake.")
+                return None, None, None
+
+            session_key = session_info['session_key']
+            nonce = decoded_packet[:12]
+            encrypted_header_length = struct.unpack('!I', decoded_packet[12:16])[0]
+            encrypted_header = decoded_packet[16:16+encrypted_header_length]
+            ciphertext = decoded_packet[16+encrypted_header_length:]
+
+            aesgcm = AESGCM(session_key)
+            header_json = aesgcm.decrypt(nonce, encrypted_header, None)
+            header_dict = json.loads(header_json.decode('utf-8'))
+            
+            # Validate header fields based on the flag
+            required_keys = ["stream_id", "flags", "timestamp"]
+            if flag in [self.DST_FLAG]:  # Only data packets require sequence numbers
+                required_keys.append("sequence_number")
+            
+            if not all(k in header_dict for k in required_keys):
+                print("Decrypted header must include required fields.")
+                return None, None, None
+
+            # Process the packet
+            if ciphertext:
+                plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+            else:
+                plaintext = b''
+
+            # Store received packet info in the session under the stream ID
+            streams = session_info.setdefault('streams', {})
+            stream_id = bytes.fromhex(header_dict['stream_id'])
+            stream_data = streams.setdefault(stream_id, {})
+            if "sequence_number" in header_dict:
+                stream_data[header_dict['sequence_number']] = {
+                    'data': plaintext,
+                    'header': header_dict
+                }
+
+            if flag == self.CST_FLAG:
+                self.received_cst.set()
+
+            return plaintext, header_dict, flag
+        except Exception as e:
+            traceback.print_exc()
+            print(f"Decryption failed stream packet: {e}")
+            return None, None, None
+
+    def finalize_stream(self, session_id, stream_id):
+        session_info = self.sessions.get(session_id)
+        if not session_info:
+            print("Session not found in finalize stream.")
+            return None
+
+        streams = session_info.get('streams', {})
+        stream_data = streams.get(stream_id, {})
+        if not stream_data:
+            print("No stream data found for this stream ID.")
+            return None
+
+        # Check for missing packets
+        total_segments = next(iter(stream_data.values()))['header'].get('total_segments')
+        if total_segments is not None:
+            missing_packets = [i for i in range(1, total_segments + 1) if i not in stream_data]
+            if missing_packets:
+                nack_packet = self.create_nack_stream_packet(session_id, stream_id, missing_packets)
+                print("NACK packet created for missing packets:", missing_packets)
+                return nack_packet
+
+        # Sort packets by sequence number and join data
+        sorted_data = [stream_data[seq]['data'] for seq in sorted(stream_data)]
+        complete_data = b''.join(sorted_data)
+
+        # Clear stream data from session
+        del streams[stream_id]
+
+        return complete_data
+
+    def create_nack_stream_packet(self, session_id, stream_id, missing_packets) -> bytes:
+        # Create a JSON header for the NACK packet
+        header = {
+            "stream_id": stream_id.hex(),
+            "missing_packets": missing_packets,
+            "timestamp": int(time.time())
+        }
+        
+        # Encrypt the header with no data
+        encrypted_packet = self.encrypt_nack_data(session_id, header)
+        if encrypted_packet is None:
+            raise Exception("Failed to create NACK stream packet.")
+        
+        # Encode the entire packet using Hamming code
+        encoded_packet = encode_bytes_with_hamming(encrypted_packet)
+        
+        return encoded_packet
+
+    def encrypt_nack_data(self, session_id, header) -> bytes:
+        try:
+            session_info = self.sessions.get(session_id)
+            if not session_info:
+                print("Session not found in encrypt nack data.")
+                return None
+
+            session_key = session_info['session_key']
+            aesgcm = AESGCM(session_key)
+            nonce = os.urandom(12)
+
+            # Encrypt header
+            header_json = json.dumps(header).encode('utf-8')
+            encrypted_header = aesgcm.encrypt(nonce, header_json, None)
+
+            encrypted_header_length = struct.pack('!I', len(encrypted_header))
+            packet = session_id + self.NST_FLAG + nonce + encrypted_header_length + encrypted_header
+
+            return packet
+
+        except Exception as e:
+            print(f"Encryption failed: {e}")
+            return None
+
+    def create_end_stream_packet(self, session_id, stream_id, flags) -> bytes:
+        # Create a JSON header for the End Stream packet
+        header = {
+            "stream_id": stream_id.hex(),
+            "timestamp": int(time.time()),
+            "flags": flags # indicates the stream has ended.
+        }
+        
+        
+        # Encrypt the header with no data
+        encrypted_packet = self.encrypt_end_stream_data(session_id, header)
+        if encrypted_packet is None:
+            raise Exception("Failed to create End Stream packet.")
+        
+        # Encode the entire packet using Hamming code
+        encoded_packet = encode_bytes_with_hamming(encrypted_packet)
+        
+        return encoded_packet, header
+
+    def encrypt_end_stream_data(self, session_id, header) -> bytes:
+        try:
+            session_info = self.sessions.get(session_id)
+            if not session_info:
+                print("Session not found in encrypt end stream data.")
+                return None
+
+            session_key = session_info['session_key']
+            aesgcm = AESGCM(session_key)
+            nonce = os.urandom(12)
+
+            # Encrypt header
+            header_json = json.dumps(header).encode('utf-8')
+            encrypted_header = aesgcm.encrypt(nonce, header_json, None)
+
+            encrypted_header_length = struct.pack('!I', len(encrypted_header))
+            packet = session_id + self.EST_FLAG + nonce + encrypted_header_length + encrypted_header
+
+            return packet
+
+        except Exception as e:
+            print(f"Encryption failed: {e}")
+            return None
+
+    def create_continue_stream_packet(self, session_id, stream_id) -> tuple[bytes, dict]:
+        # Create a JSON header for the Continue Stream packet
+        header = {
+            "stream_id": stream_id.hex(),
+            "timestamp": int(time.time())
+        }
+        
+        # Encrypt the header with no data
+        encrypted_packet = self.encrypt_continue_stream_data(session_id, header)
+        if encrypted_packet is None:
+            raise Exception("Failed to create Continue Stream packet.")
+        
+        # Encode the entire packet using Hamming code
+        encoded_packet = encode_bytes_with_hamming(encrypted_packet)
+        
+        return encoded_packet, header
+
+    def encrypt_continue_stream_data(self, session_id, header) -> bytes:
+        try:
+            session_info = self.sessions.get(session_id)
+            if not session_info:
+                print("Session not found in encrypt continue stream data.")
+                return None
+
+            session_key = session_info['session_key']
+            aesgcm = AESGCM(session_key)
+            nonce = os.urandom(12)
+
+            # Encrypt header
+            header_json = json.dumps(header).encode('utf-8')
+            encrypted_header = aesgcm.encrypt(nonce, header_json, None)
+
+            encrypted_header_length = struct.pack('!I', len(encrypted_header))
+            packet = session_id + self.CST_FLAG + nonce + encrypted_header_length + encrypted_header
+
+            return packet
+
+        except Exception as e:
+            print(f"Encryption failed: {e}")
+            return None
+
+    def segment_data(self, data, max_packet_size):
+        return [data[i:i + max_packet_size] for i in range(0, len(data), max_packet_size)]
+
+
+
+
+class StreamManager:
+    def __init__(self, protocol):
+        self.protocol = protocol
+        self.active_streams = {}
+        self.lock = threading.Lock()
+
+    def create_stream(self, session_id, stream_id, send_callback, receive_callback, data_processing_callback=None):
+        """Create a new stream."""
+        with self.lock:
+            if stream_id not in self.active_streams:
+                stream = Stream(self, session_id, stream_id, send_callback, receive_callback, data_processing_callback)
+                self.active_streams[stream_id] = stream
+                return stream
+            else:
+                print(f"Stream {stream_id.hex()} already exists.")
+                return self.active_streams[stream_id]
+
+    def send_stream(self, session_id, stream_id, data):
+        """Send data through an existing stream."""
+        with self.lock:
+            stream = self.active_streams.get(stream_id)
+            if stream:
+                stream.send(data)
+            else:
+                print(f"Stream {stream_id.hex()} not found.")
+
+    def close_stream(self, stream_id):
+        """Close an existing stream."""
+        with self.lock:
+            stream = self.active_streams.pop(stream_id, None)
+            if stream:
+                stream.close()
+
+
+
+
+class Stream:
+    def __init__(self, protocol, session_id, stream_id, role, send_callback, receive_callback, data_processing_callback=None):
+        self.protocol = protocol
+        self.session_id = session_id
+        self.stream_id = stream_id
+        self.role = role  # 'sender' or 'receiver'
+        self.send_callback = send_callback
+        self.receive_callback = receive_callback
+        self.data_processing_callback = data_processing_callback
+        self.buffer = Queue()
+        self.active = True
+        self.lock = threading.Lock()
+        self.thread = threading.Thread(target=self._process_stream)
+        self.thread.start()
+
+    def send(self, data):
+        """Send data through the stream."""
+        with self.lock:
+            self.buffer.put(data)
+
+    def _process_stream(self):
+        """Internal method to handle sending and receiving data."""
+        while self.active:
+            try:
+                # Process sending data
+                if self.role == 'sender':
+                    data = self.buffer.get(timeout=1)
+                    self.send_callback(self.session_id, data, {'stream_id': self.stream_id})
+            except Empty:
+                pass
+
+            # Process receiving data
+            packet = self.receive_callback(self.stream_id, self.session_id)
+            if packet:
+                plaintext, header, flag = self._decrypt_packet(packet)
+                if self.data_processing_callback and plaintext:
+                    self.data_processing_callback(plaintext, header)
+    def _decrypt_packet(self, packet):
+        """Decrypt a received packet."""
+        try:
+            decoded_packet = decode_bytes_with_hamming(packet)
+            session_id = decoded_packet[:16]
+            flag = decoded_packet[16:19]
+            if flag not in [self.protocol.DST_FLAG, self.protocol.EST_FLAG, self.protocol.CST_FLAG]:
+                print("Invalid stream packet.")
+                return None, None, None
+
+            decoded_packet = decoded_packet[19:]  # Skip the flag
+            session_info = self.protocol.sessions.get(session_id)
+            if not session_info:
+                print("Session not found decrypt packet in stream.")
+                return None, None, None
+
+            if time.time() > session_info['valid_until']:
+                print("Session expired, please perform a new handshake.")
+                return None, None, None
+
+            session_key = session_info['session_key']
+            nonce = decoded_packet[:12]
+            encrypted_header_length = struct.unpack('!I', decoded_packet[12:16])[0]
+            encrypted_header = decoded_packet[16:16+encrypted_header_length]
+            ciphertext = decoded_packet[16+encrypted_header_length:]
+
+            aesgcm = AESGCM(session_key)
+            header_json = aesgcm.decrypt(nonce, encrypted_header, None)
+            header_dict = json.loads(header_json.decode('utf-8'))
+
+            # Validate header fields based on the flag
+            required_keys = ["stream_id", "flags", "timestamp"]
+            if flag in [self.protocol.DST_FLAG]:  # Only data packets require sequence numbers
+                required_keys.append("sequence_number")
+
+            if not all(k in header_dict for k in required_keys):
+                print("Decrypted header must include required fields.")
+                return None, None, None
+
+            if ciphertext:
+                plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+            else:
+                plaintext = b''
+
+            return plaintext, header_dict, flag
+        except Exception as e:
+            print(f"Decryption failed: {e}")
+            return None, None, None
+
+    def close(self):
+        """Close the stream."""
+        self.active = False
+        self.thread.join()
+
+
+
+class StreamSocket:
+    def __init__(self, protocol, session_id):
+        self.protocol = protocol
+        self.session_id = session_id
+        self.streams = {}
+        self.lock = threading.Lock()
+        self.received_packets = defaultdict(lambda: defaultdict(Queue))
+
+    def create_stream(self, stream_id=None, send_callback=None):
+        """Create a new stream within the session."""
+        stream_id = stream_id or os.urandom(16)
+        with self.lock:
+            if stream_id not in self.streams:
+                stream = Stream(self.protocol, self.session_id, stream_id, 'sender', send_callback, self._receive_callback, self._data_processing_callback)
+                self.streams[stream_id] = stream
+                return stream
+            else:
+                print(f"Stream {stream_id} already exists.")
+                return self.streams[stream_id]
+
+    def _receive_callback(self, stream_id, session_id):
+        try:
+            return self.received_packets[session_id][stream_id].get_nowait()
+        except Empty:
+            return None
+
+    def _data_processing_callback(self, data, header):
+        stream_id = header['stream_id']
+        self.received_packets[self.session_id][stream_id].put(data)
+
+    def send(self, stream_id, data):
+        """Send data through a specific stream."""
+        with self.lock:
+            stream = self.streams.get(stream_id)
+            if stream:
+                stream.send(data)
+            else:
+                print(f"Stream {stream_id} not found.")
+
+    def receive(self, stream_id):
+        """Receive data from a specific stream."""
+        with self.lock:
+            stream = self.streams.get(stream_id)
+            if not stream:
+                # Automatically create a stream for the receiver
+                stream = Stream(self.protocol, self.session_id, stream_id, 'receiver', None, self._receive_callback, self._data_processing_callback)
+                self.streams[stream_id] = stream
+            try:
+                return self.received_packets[self.session_id][stream_id].get(timeout=1)
+            except Empty:
+                return None
+
+    def close_stream(self, stream_id):
+        """Close a specific stream."""
+        with self.lock:
+            stream = self.streams.pop(stream_id, None)
+            if stream:
+                stream.close()
+
+    def close(self):
+        """Close all streams."""
+        with self.lock:
+            for stream in self.streams.values():
+                stream.close()
+            self.streams.clear()
+
+
+
 
 # Example usage
 def main():
-    print("=== Using SilentProtocol with PoW ===")
-    # Initialize protocol objects for Node A and Node B
     protocol_a = SilentProtocol()
     protocol_b = SilentProtocol()
-    protocol_a.MAX_PACKET_SIZE = 1024
+
+
 
     # Node A initiates a handshake request to Node B
     pow_request, node_a_private_key = protocol_a.perform_handshake_request()
 
-    if not pow_request:
-        print("Failed to perform handshake request.")
-        return
-
     # Node B responds with a PoW challenge
     pow_challenge, peer_public_key_bytes = protocol_b.perform_pow_challenge(pow_request)
-
-    if not pow_challenge:
-        print("Failed to perform PoW challenge.")
-        return
 
     # Node A completes the handshake request with PoW solution
     handshake_request = protocol_a.complete_handshake_request(pow_challenge, node_a_private_key)
 
-    if not handshake_request:
-        print("Failed to complete handshake request.")
-        return
-
     # Node B processes the handshake request and responds
-    response, node_b_private_key, session_id_b = protocol_b.perform_handshake_response(handshake_request)
-
-    if not response:
-        print("Failed to perform handshake response.")
-        return
+    response, private_key, session_id_b = protocol_b.perform_handshake_response(handshake_request)
 
     # Node A completes the handshake by processing the response
-    session_id = protocol_a.complete_handshake(response, node_a_private_key)
+    session_id_a = protocol_a.complete_handshake(response, node_a_private_key)
 
-    if not session_id:
-        print("Failed to complete handshake.")
-        return
+    print("Handshake completed successfully.")
+    print("Session ID A:", session_id_a.hex())
+    print("Session ID B:", session_id_b.hex())
 
-    print("Handshake completed successfully. Session ID:", session_id.hex())
 
-    # Node A sends a request to Node B
-    request_data = json.dumps({"action": "Hello world"}).encode('utf-8')
-    encrypted_request, request_uuid_a = protocol_a.create_request(session_id, request_data)
-    if encrypted_request is None:
-        print("Failed to send request.")
-        return
+    # Create a StreamSocket for Node A
+    stream_socket_a = StreamSocket(protocol_a, session_id_a)
 
-    # Node B decrypts the request and sends a response
-    decrypted_request, request_header, message_type, request_uuid_b = protocol_b.decrypt_data_packet(encrypted_request)
-    if decrypted_request is None:
-        print("Failed to decrypt request.")
-        return
+    # Create a StreamSocket for Node B
+    stream_socket_b = StreamSocket(protocol_b, session_id_b)
 
-    print("Decrypted request:", decrypted_request.decode(request_header['encoding']))
-    print("Request Header:", request_header)
+    # Define the send callback to simulate network communication
+    def send_callback(session_id, packet, header):
+        # Simulate sending from A to B
+        stream_socket_b.received_packets[session_id][header['stream_id']].put(packet)
 
-    response_data = json.dumps({"data": "Here is your data"}).encode('utf-8')
-    encrypted_response = protocol_b.create_response(session_id_b, response_data, request_uuid_b)
-    if encrypted_response is None:
-        print("Failed to send response.")
-        return
+    # Create a stream for Node A with the send callback
+    stream_a = stream_socket_a.create_stream(send_callback=send_callback)
 
-    # Node A decrypts the response
-    decrypted_response, response_header, message_type, request_uuid_c = protocol_a.decrypt_response_packet(encrypted_response)
-    if decrypted_response is None:
-        print("Failed to decrypt response.")
-        return
+    packet = protocol_a.encrypt_stream_data(session_id_a, b"First part of the data.", {})
+    
+    # Send data from Node A to Node B
+    stream_socket_a.send(stream_a.stream_id, packet)
+   # stream_socket_a.send(stream_a.stream_id, b"Second part of the data.")
 
-    print("Response Header:", response_header)
-    print("Decrypted response:", decrypted_response.decode(response_header['encoding']))
+    # Node B will automatically create a stream instance when data is received
+    received_data = stream_socket_b.receive(stream_a.stream_id)
+    while received_data:
+        print(f"Node B received: {received_data}")
+        received_data = stream_socket_b.receive(stream_a.stream_id)
 
-    assert decrypted_response.decode(response_header['encoding']) == response_data.decode('utf-8')
-
-    assert request_uuid_b == request_uuid_a == request_uuid_c
+    stream_socket_a.close()
+    stream_socket_b.close()
 
 if __name__ == "__main__":
     main()
