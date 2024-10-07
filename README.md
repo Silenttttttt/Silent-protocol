@@ -38,7 +38,7 @@ SilentProtocol is a flexible, TCP-based, bidirectional communication protocol de
 To run the example usage of SilentProtocol, execute the following command:
 
 ```bash
-python silent_protocol/protocol.py
+python protocol.py
 ```
 
 This will demonstrate the handshake and message exchange process between two nodes using the SilentProtocol.
